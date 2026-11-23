@@ -73,7 +73,7 @@ function fromApi(b) {
   const idOf = {};
   b.nodes.forEach((n) => { idOf[n.id] = n.ticker || n.name; });
   const companies = b.nodes.map((n) => ({
-    id: idOf[n.id], name: n.name, exch: n.listed ? 'SEC filer' : 'not an SEC filer', country: n.country || null,
+    id: idOf[n.id], tk: n.ticker || null, name: n.name, exch: n.listed ? 'SEC filer' : 'private / foreign, not an SEC filer', country: n.country || null,
     sic: n.sic ? n.sic + ' · ' + (n.sic_desc || '') : null, listed: !!n.listed,
     tags: (n.tags || []).map((t) => [t.tag, t.role]), expanded: !!n.expanded,
     // 5-year history from the API; older data only has the latest year.
@@ -85,7 +85,7 @@ function fromApi(b) {
     const a = idOf[e.source], t = idOf[e.target];
     if (e.relation === 'competes_with') { competes.push([a, t, e.confidence]); return; }
     const ys = (e.citations || []).map((c) => yearOf(c.filed)).filter(Boolean);
-    links.push({ from: a, to: t, rel: e.relation, comp: (e.components || [])[0] || e.relation.replace(/_/g, ' '),
+    links.push({ from: a, to: t, rel: e.relation, comp: (e.components || [])[0] || null,   // only components the filing named
       imp: null, country: null, conf: e.confidence,
       first: ys.length ? Math.min(...ys) : THIS_YEAR, last: ys.length ? Math.max(...ys) : THIS_YEAR });
   });
@@ -177,8 +177,11 @@ class Component extends DCLogic {
     const COL = { 'ai compute': '#4F46E5', 'semiconductors': '#0284C7', 'robotics': '#EA580C', 'automotive': '#059669', 'cloud software': '#9333EA', 'retail': '#DB2777', 'medical devices': '#0D9488', 'sensors': '#CA8A04', 'space': '#2563EB', 'defense': '#475569', 'materials': '#78716C', 'logistics': '#B45309' };
     const colOf = (t) => COL[t] || '#6B7280';
     const byId = {}; D.companies.forEach((c) => { byId[c.id] = c; });
+    // What to show in ticker spots: the company's primary ticker, or "—" for private / foreign
+    // companies (live data). Sample companies use their id as the ticker.
+    const tick = (id) => (byId[id] && 'tk' in byId[id] ? (byId[id].tk || '—') : id);
     const main = (c) => (c.tags[0] ? c.tags[0][0] : 'other');
-    const COMPS = Array.from(new Set(D.links.filter(isSupply).map((l) => l.comp))).sort();
+    const COMPS = Array.from(new Set(D.links.filter(isSupply).map((l) => l.comp).filter(Boolean))).sort();
     const hasCountry = D.companies.some((c) => c.country);
 
     const maxYear = D.years[D.years.length - 1];
@@ -228,7 +231,17 @@ class Component extends DCLogic {
     const visible = Object.keys(hop);
 
     // ----- layout -----
-    const cx = 320, cy = 200, NW = 150, NH = 46;
+    // Many neighbours (a real 10-K can name 25+ competitors) -> smaller "compact" cards on several
+    // rings instead of one overlapping ring. The map then scales down to fit its area (see update()).
+    const ringIds = visible.filter((i) => hop[i] >= 1);
+    const compact = !comp && view !== 'region' && ringIds.length > 12;
+    const NW = compact ? 124 : 150, NH = compact ? 34 : 46;
+    let mapW = 640, mapH = 400;
+    let cx = 320, cy = 200;
+    if (comp) {                       // component view: two columns, as tall as the longer one
+      const n = Math.max(...['makes it', 'buys it'].map((r) => visible.filter((id) => role[id] === r).length), 1);
+      mapH = Math.max(400, n * 62 + 60); cy = mapH / 2;
+    }
     const pos = {};
     let regions = [];
     if (view === 'region' && hasCountry) {
@@ -247,11 +260,30 @@ class Component extends DCLogic {
       makers.forEach((id, i) => { pos[id] = { x: 90, y: cy + (i - (makers.length - 1) / 2) * 62 }; });
       buyers.forEach((id, i) => { pos[id] = { x: 550, y: cy + (i - (buyers.length - 1) / 2) * 62 }; });
     } else {
+      // Concentric ellipses around the centre; each ring holds as many cards as fit its perimeter.
+      // Hop-1 neighbours (grouped by role, so rivals sit together) fill the inner rings, hop-2 the outer.
+      const order = visible.filter((i) => hop[i] === 1).sort((a, b) => (role[a] + a).localeCompare(role[b] + b))
+        .concat(visible.filter((i) => hop[i] === 2));
+      const rings = [];
+      let left = order.length, k = 0;
+      while (left > 0) {
+        const rx = 230 + k * (NW + 18), ry = rx * 0.6;   // rings a card-width apart, so they never touch
+        const per = Math.PI * (3 * (rx + ry) - Math.sqrt((3 * rx + ry) * (rx + 3 * ry)));   // ellipse perimeter
+        const cap = Math.max(6, Math.floor(per / (NW + 14)));
+        rings.push({ rx, ry, n: Math.min(cap, left) });
+        left -= cap; k++;
+      }
+      const outer = rings.length ? rings[rings.length - 1] : { rx: 0, ry: 0 };
+      mapW = Math.max(640, 2 * (outer.rx + NW / 2 + 12)); mapH = Math.max(400, 2 * (outer.ry + NH / 2 + 12));
+      cx = mapW / 2; cy = mapH / 2;
       pos[centerId] = { x: cx, y: cy, a: 0 };
-      const r1 = visible.filter((i) => hop[i] === 1).sort((a, b) => (role[a] + a).localeCompare(role[b] + b));
-      r1.forEach((id, i) => { const a = -Math.PI / 2 + 2 * Math.PI * i / Math.max(r1.length, 1); pos[id] = { x: cx + 225 * Math.cos(a), y: cy + 135 * Math.sin(a), a }; });
-      const r2 = visible.filter((i) => hop[i] === 2);
-      r2.forEach((id, i) => { const a = -Math.PI / 2 + 2 * Math.PI * (i + 0.5) / r2.length; pos[id] = { x: cx + 330 * Math.cos(a), y: cy + 190 * Math.sin(a) }; });
+      let idx = 0;
+      rings.forEach((r, ri) => {
+        for (let i = 0; i < r.n; i++, idx++) {
+          const a = -Math.PI / 2 + 2 * Math.PI * (i + (ri % 2 ? 0.5 : 0)) / r.n;
+          pos[order[idx]] = { x: cx + r.rx * Math.cos(a), y: cy + r.ry * Math.sin(a), a };
+        }
+      });
     }
 
     // ----- exposure -----
@@ -268,14 +300,16 @@ class Component extends DCLogic {
       }
       const c = byId[id], isC = !comp && id === centerId, isS = id === selId;
       const faded = (tag && !c.tags.some(([t]) => t === tag)) || (expo !== 'all' && !dependsOn(id));
-      const sub = isC ? id + ' · searched' : id + ' · ' + role[id];
+      const sub = isC ? tick(id) + ' · searched' : (byId[id].tk === null ? 'private/foreign' : tick(id)) + ' · ' + role[id];
       const warn = role[id] === 'single source';
       const border = isS ? '#111827' : (isC ? '#4F46E5' : (expo !== 'all' && !faded ? '#D97706' : '#DDE1E8'));
+      const small = compact && !isC;   // the searched company keeps its full-size card
+      const w = small ? NW : 150, h = small ? NH : 46, d = small ? 22 : 28;
       return {
-        name: c.name, sub, initial: c.name[0], aria: c.name + ', ' + sub, pick: pick(id),
-        subStyle: 'font-size:11px;white-space:nowrap;color:' + (warn ? '#DC2626' : '#4B5563'),
-        dot: 'width:28px;height:28px;flex:none;border-radius:8px;background:' + colOf(main(c)) + ';color:#FFFFFF;display:flex;align-items:center;justify-content:center;font:600 12px Inter,sans-serif',
-        style: 'position:absolute;left:' + Math.round(p.x - NW / 2) + 'px;top:' + Math.round(p.y - NH / 2) + 'px;width:' + NW + 'px;height:' + NH + 'px;box-sizing:border-box;padding:0 10px;display:flex;align-items:center;gap:8px;background:#FFFFFF;border:' + (isS || isC || border === '#D97706' ? 2 : 1) + 'px ' + (c.listed ? 'solid ' : 'dashed ') + border + ';border-radius:12px;cursor:pointer;font-family:Inter,sans-serif;color:#111827;z-index:2;opacity:' + (faded ? 0.28 : 1) + ';transition:opacity .15s'
+        name: c.name, sub, initial: c.name[0], aria: c.name + ', ' + sub, pick: pick(id), title: c.name + ' · ' + sub,
+        subStyle: small ? 'display:none' : 'font-size:11px;white-space:nowrap;color:' + (warn ? '#DC2626' : '#4B5563'),
+        dot: 'width:' + d + 'px;height:' + d + 'px;flex:none;border-radius:' + (small ? 6 : 8) + 'px;background:' + colOf(main(c)) + ';color:#FFFFFF;display:flex;align-items:center;justify-content:center;font:600 ' + (small ? 11 : 12) + 'px Inter,sans-serif',
+        style: 'position:absolute;left:' + Math.round(p.x - w / 2) + 'px;top:' + Math.round(p.y - h / 2) + 'px;width:' + w + 'px;height:' + h + 'px;' + (small ? 'padding:0 8px !important;' : '') + 'box-sizing:border-box;padding:0 10px;display:flex;align-items:center;gap:8px;background:#FFFFFF;border:' + (isS || isC || border === '#D97706' ? 2 : 1) + 'px ' + (c.listed ? 'solid ' : 'dashed ') + border + ';border-radius:12px;cursor:pointer;font-family:Inter,sans-serif;color:#111827;z-index:2;opacity:' + (faded ? 0.28 : 1) + ';transition:opacity .15s'
       };
     });
 
@@ -327,7 +361,7 @@ class Component extends DCLogic {
     } else {
       const c = byId[selId];
       const ins = inL(selId), outs = outL(selId);
-      p = { isCo: true, name: c.name, initial: c.name[0], sub: c.id + ' · ' + c.exch,
+      p = { isCo: true, name: c.name, initial: c.name[0], sub: tick(c.id) + ' · ' + c.exch,
         meta: (c.country ? 'HQ ' + c.country + ' · ' : '') + (c.listed ? 'SIC ' + (c.sic || 'code loads from EDGAR') : 'not an SEC filer'),
         fin: c.fin || null,
         filings: D.live && selId === D.centerId ? D.filings : [],
@@ -336,10 +370,10 @@ class Component extends DCLogic {
                         : 'Relationships appear once its annual report has been read by the LLM (next step: background extraction).') : '',
         badge: 'width:52px;height:52px;flex:none;border-radius:14px;background:' + colOf(main(c)) + ';color:#FFFFFF;display:flex;align-items:center;justify-content:center;font:600 20px Space Grotesk,sans-serif',
         tags: c.tags.map(([t, r]) => ({ tag: t, role: r, pick: setTag(t), dot: 'width:8px;height:8px;border-radius:3px;background:' + colOf(t), style: 'min-height:30px;padding:0 10px;display:inline-flex;align-items:center;gap:6px;border-radius:8px;border:1px solid ' + (t === tag ? '#111827' : '#DDE1E8') + ';background:#FFFFFF;font:12px Inter,sans-serif;color:#111827;cursor:pointer' })),
-        makesLabel: 'Components it supplies', makes: Array.from(new Set(outs.filter(isSupply).map((l) => l.comp))).map(compBtn),
-        buysLabel: 'Components it buys', buys: Array.from(new Set(ins.filter(isSupply).map((l) => l.comp))).map(compBtn),
+        makesLabel: 'Components it supplies', makes: Array.from(new Set(outs.filter(isSupply).map((l) => l.comp).filter(Boolean))).map(compBtn),
+        buysLabel: 'Components it buys', buys: Array.from(new Set(ins.filter(isSupply).map((l) => l.comp).filter(Boolean))).map(compBtn),
         stats: [['Single-source deps', ins.filter((l) => l.imp === 'single').length, '#DC2626'], ['Major customers', outs.filter((l) => l.imp === 'major').length, '#4F46E5'], ['Stale links', ins.concat(outs).filter((l) => l.stale).length, '#6B7280']],
-        canCenter: c.listed && (comp || selId !== centerId), centerLabel: 'Explore from ' + c.id, center: recenter(selId) };
+        canCenter: c.listed && (comp || selId !== centerId), centerLabel: 'Explore from ' + tick(c.id), center: recenter(selId) };
     }
     p.makesEmpty = p.makes.length === 0; p.buysEmpty = p.buys.length === 0;
     p.stats = p.stats.map(([label, value, color]) => ({ label, value, style: 'font-weight:600;font-size:18px;margin-top:2px;color:' + (color && value ? color : '#111827') }));
@@ -348,25 +382,25 @@ class Component extends DCLogic {
     const mono = 'font:13px IBM Plex Mono,monospace';
     const cell = (text, style) => ({ text: String(text), style: (style || '') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap' });
     const impCell = (imp) => imp === 'major' ? cell('≥10% revenue', 'color:#4F46E5;font-weight:500') : (imp === 'single' ? cell('Single source', 'color:#DC2626;font-weight:500') : cell('Mentioned', 'color:#6B7280'));
-    const seenCell = (l) => cell(l.first + '–' + l.last + (l.stale ? ' · stale' : ''), l.stale ? 'color:#9CA3AF' : 'color:#374151');
+    const seenCell = (l) => cell((l.first === l.last ? l.first : l.first + '–' + l.last) + (l.stale ? ' · stale' : ''), l.stale ? 'color:#9CA3AF' : 'color:#374151');
     const rowStyle = (cols, on) => 'width:100%;display:grid;grid-template-columns:' + cols + ';gap:10px;padding:0 16px;min-height:38px;align-items:center;border:none;border-bottom:1px solid #F1F3F7;background:' + (on ? '#EEF0FF' : '#FFFFFF') + ';' + mono + ';color:#111827;text-align:left;cursor:pointer';
     let colsDef, head, rows = [], title, count;
     if (tag) {
       colsDef = '64px minmax(0,1fr) 120px 150px 90px 110px'; head = ['TICKER', 'COMPANY', 'ROLE', 'MAIN INDUSTRY', 'HQ', 'ON MAP'];
       rows = D.companies.filter((c) => c.tags.some(([t]) => t === tag)).map((c) => ({ pick: hop[c.id] != null ? pick(c.id) : recenter(c.id), style: rowStyle(colsDef, c.id === selId),
-        cells: [cell(c.id, 'color:#4F46E5;font-weight:500'), cell(c.name, 'font-family:Inter,sans-serif'), cell(c.tags.find(([t]) => t === tag)[1]), cell(main(c)), cell(c.country), cell(hop[c.id] != null ? 'yes' : 'explore →', 'color:#6B7280')] }));
+        cells: [cell(tick(c.id), 'color:#4F46E5;font-weight:500'), cell(c.name, 'font-family:Inter,sans-serif'), cell(c.tags.find(([t]) => t === tag)[1]), cell(main(c)), cell(c.country || '–'),cell(hop[c.id] != null ? 'yes' : 'explore →', 'color:#6B7280')] }));
       title = 'Companies tagged ' + tag; count = rows.length + ' across all searches';
     } else if (tab === 'risk') {
       colsDef = '64px minmax(0,1fr) 90px 110px 120px minmax(0,1fr)'; head = ['TICKER', 'SUPPLIER', 'HQ', 'CUSTOMERS', 'SINGLE-SOURCE', 'COMPONENTS'];
       const sup = {};
-      active.filter((l) => !l.stale).forEach((l) => { const s = sup[l.from] || (sup[l.from] = { cust: new Set(), single: 0, comps: new Set() }); s.cust.add(l.to); if (l.imp === 'single') s.single++; s.comps.add(l.comp); });
+      active.filter((l) => !l.stale).forEach((l) => { const s = sup[l.from] || (sup[l.from] = { cust: new Set(), single: 0, comps: new Set() }); s.cust.add(l.to); if (l.imp === 'single') s.single++; if (l.comp) s.comps.add(l.comp); });
       rows = Object.keys(sup).sort((a, b) => (sup[b].single * 3 + sup[b].cust.size) - (sup[a].single * 3 + sup[a].cust.size)).map((id) => ({ pick: pick(id), style: rowStyle(colsDef, id === selId),
-        cells: [cell(id, 'color:#4F46E5;font-weight:500'), cell(byId[id].name, 'font-family:Inter,sans-serif'), cell(byId[id].country, byId[id].country === expo ? 'color:#B45309;font-weight:500' : ''), cell(sup[id].cust.size), cell(sup[id].single || '–', sup[id].single ? 'color:#DC2626;font-weight:500' : 'color:#9CA3AF'), cell(Array.from(sup[id].comps).join(', '), 'font-family:Inter,sans-serif;color:#374151')] }));
+        cells: [cell(tick(id), 'color:#4F46E5;font-weight:500'), cell(byId[id].name, 'font-family:Inter,sans-serif'), cell(byId[id].country || '–',byId[id].country === expo ? 'color:#B45309;font-weight:500' : ''), cell(sup[id].cust.size), cell(sup[id].single || '–', sup[id].single ? 'color:#DC2626;font-weight:500' : 'color:#9CA3AF'), cell(Array.from(sup[id].comps).join(', '), 'font-family:Inter,sans-serif;color:#374151')] }));
       title = 'Chokepoints in ' + year; count = 'ranked by single-source dependence, then customers';
     } else if (comp) {
       colsDef = '64px minmax(0,1fr) 64px minmax(0,1fr) 120px 90px 120px 60px'; head = ['MAKER', '', 'BUYER', '', 'IMPORTANCE', 'MADE IN', 'SEEN', 'CONF'];
       rows = active.filter((l) => l.comp === comp && hop[l.from] != null && hop[l.to] != null).map((l) => ({ pick: pick(l.from), style: rowStyle(colsDef, l.from === selId || l.to === selId),
-        cells: [cell(l.from, 'color:#4F46E5;font-weight:500'), cell(byId[l.from].name, 'font-family:Inter,sans-serif'), cell(l.to, 'color:#4F46E5;font-weight:500'), cell(byId[l.to].name, 'font-family:Inter,sans-serif'), impCell(l.imp), cell(l.country || '–'), seenCell(l), cell(linkConf(l).toFixed(2))] }));
+        cells: [cell(tick(l.from), 'color:#4F46E5;font-weight:500'), cell(byId[l.from].name, 'font-family:Inter,sans-serif'), cell(tick(l.to), 'color:#4F46E5;font-weight:500'), cell(byId[l.to].name, 'font-family:Inter,sans-serif'), impCell(l.imp), cell(l.country || '–'), seenCell(l), cell(linkConf(l).toFixed(2))] }));
       title = 'Supply of ' + comp; count = rows.length + ' links';
     } else {
       colsDef = '60px 110px minmax(0,1fr) minmax(0,1fr) 116px 84px 116px 48px'; head = ['TICKER', 'RELATION', 'COUNTERPARTY', 'COMPONENT', 'IMPORTANCE', 'MADE IN', 'SEEN', 'CONF'];
@@ -375,8 +409,8 @@ class Component extends DCLogic {
       if (filter === 'all' || filter === 'cus') outL(selId).forEach((l) => r.push([l.to, REL_OUT[l.rel] || 'SUPPLIES', '#111827', l]));
       if (filter === 'all' || filter === 'com') comN(selId).forEach((x) => r.push([x, 'COMPETES', '#9333EA', null]));
       rows = r.map(([x, rel, color, l]) => ({ pick: pick(x), style: rowStyle(colsDef, false),
-        cells: [cell(x, 'color:#4F46E5;font-weight:500'), cell(rel, 'color:' + color), cell(byId[x].name, 'font-family:Inter,sans-serif'),
-          l && isSupply(l) ? cell(l.comp, 'font-family:Inter,sans-serif;color:#374151;text-decoration:underline') : cell('–', 'color:#9CA3AF'),
+        cells: [cell(tick(x), 'color:#4F46E5;font-weight:500'), cell(rel, 'color:' + color), cell(byId[x].name, 'font-family:Inter,sans-serif'),
+          l && isSupply(l) && l.comp ? cell(l.comp,'font-family:Inter,sans-serif;color:#374151;text-decoration:underline') : cell('–', 'color:#9CA3AF'),
           l ? impCell(l.imp) : cell('–', 'color:#9CA3AF'), l && l.country ? cell(l.country, l.country === expo ? 'color:#B45309;font-weight:500' : '') : cell('–', 'color:#9CA3AF'),
           l ? seenCell(l) : cell('–', 'color:#9CA3AF'), cell((l ? linkConf(l) : rivalConf(selId, x)).toFixed(2))] }));
       title = 'Relationships · ' + byId[selId].name; count = rows.length + ' rows';
@@ -420,7 +454,7 @@ class Component extends DCLogic {
         ? ['NVDA', 'TER', 'ISRG', 'RKLB', 'SYM'].map((t) => [t, () => liveCompany(t)])
         : [['NVDA', recenter('NVDA')], ['SYM', recenter('SYM')], ['RKLB', recenter('RKLB')], ['lidar', openComp('lidar')], ['harmonic reducers', openComp('harmonic reducers')]]
       ).map(([t, f]) => ({ t, pick: f })),
-      years: D.years, live: !!D.live, api: API, loadedIn: D.loadedIn,
+      years: D.years, live: !!D.live, api: API, loadedIn: D.loadedIn, mapW, mapH,
       p,
       tabs: [['rel', comp ? 'Supply' : 'Relationships'], ['risk', 'Chokepoints']].map(([k, l]) => ({ label: l, style: tabSeg(k === tab && !tag), pick: () => this.setState({ tab: k, tag: null }) })),
       inTag: !!tag, exitTag: () => this.setState({ tag: null }), filters,
@@ -486,11 +520,15 @@ function update() {
   H = [];
   const V = app.renderVals();
 
-  // map
+  // map: sized to its layout, then scaled down (never up) to fit the space between the panels
+  const map = $('map'), area = map.parentElement;
+  const fit = area && area.clientWidth ? Math.min(1, area.clientWidth / V.mapW, area.clientHeight / V.mapH) : 1;
+  map.style.width = V.mapW + 'px'; map.style.height = V.mapH + 'px';
+  map.style.transform = 'translate(-50%,-50%) scale(' + fit.toFixed(3) + ')';
   $('map').innerHTML =
     V.regions.map((g) => '<div style="' + esc(g.style) + '"><span style="' + esc(g.labelStyle) + '">' + esc(g.label) + '</span></div>').join('') +
     V.edges.map((e) => '<div style="' + esc(e.style) + '"></div>').join('') +
-    V.nodes.map((n) => btn(n, '<span style="' + esc(n.dot) + '">' + esc(n.initial) + '</span><span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;text-align:left"><span style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(n.name) + '</span><span style="' + esc(n.subStyle) + '">' + esc(n.sub) + '</span></span>', 'aria-label="' + esc(n.aria) + '"')).join('');
+    V.nodes.map((n) => btn(n, '<span style="' + esc(n.dot) + '">' + esc(n.initial) + '</span><span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;text-align:left"><span style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(n.name) + '</span><span style="' + esc(n.subStyle) + '">' + esc(n.sub) + '</span></span>', 'aria-label="' + esc(n.aria) + '" title="' + esc(n.title || n.aria) + '"')).join('');
 
   // search bar, year bar
   $('depths').innerHTML = V.depths.map((d) => btn(d, esc(d.label))).join('');
@@ -581,6 +619,7 @@ $('xq').addEventListener('input', (e) => {
 $('xq').addEventListener('keydown', (e) => { if (e.key === 'Enter') window.__V.doSearch(); });
 $('go').addEventListener('click', () => window.__V.doSearch());
 $('yr').addEventListener('input', (e) => app.setState({ year: Number(e.target.value) }));
+window.addEventListener('resize', () => update());   // re-fit the map to the new window size
 update();
 
 // Served by `itx serve`? Then switch to live search. Opened as a plain file, this fails and the sample stays.

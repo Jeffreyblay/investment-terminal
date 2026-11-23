@@ -9,7 +9,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from bs4 import BeautifulSoup
+import warnings
+
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
+# Modern 10-Ks are inline-XBRL XHTML; the HTML parser reads them fine, so skip bs4's warning.
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 # 10-K item headings. 20-F uses "Item 4" (company info) and "Item 3.D" (risk factors).
 SECTION_PATTERNS = {

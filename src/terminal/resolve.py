@@ -3,7 +3,7 @@ Manufacturing Co., Ltd.") to one node id.
 
 Order of attempts:
   1. manual aliases (config/aliases.yaml)  - you curate these over time
-  2. exact match on normalised SEC company names / tickers
+  2. exact match on normalised SEC company names
   3. fuzzy match (rapidfuzz) above a threshold
   4. otherwise a private / non-SEC entity: id "ORG:<normalised name>"
 """
@@ -55,8 +55,8 @@ class Resolver:
                 return self._listed(self.by_ticker[target.upper()], "alias")
             return self._private(str(target), normalize(str(target)), "alias")
 
-        if raw.upper() in self.by_ticker and raw.isupper() and len(raw) <= 5:
-            return self._listed(self.by_ticker[raw.upper()], "ticker")
+        # No bare-ticker matching: filings name companies, and short all-caps words are often
+        # internal terms ("VIP" matched the unrelated ticker VIP). Map real ticker mentions in aliases.yaml.
 
         if norm in self.by_norm:
             return self._listed(self.by_norm[norm], "exact")

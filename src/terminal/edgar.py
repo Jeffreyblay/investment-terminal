@@ -97,14 +97,20 @@ class Edgar:
 
     # ---------- companies ----------
     def tickers(self) -> dict[str, dict]:
-        """Map TICKER -> {cik, ticker, name}. Refreshed weekly."""
+        """Map TICKER -> {cik, ticker, name}, where `ticker` is always the company's primary
+        (most common) ticker. Refreshed weekly.
+
+        Many companies have several tickers (share classes, preferred shares, warrants:
+        GOOGL/GOOG, BRK-B/BRK-A). The SEC file lists each company's main ticker first, so the
+        first one seen per CIK is used everywhere; looking up any of its tickers returns it."""
         if self._tickers is None:
             raw = self.get_json("https://www.sec.gov/files/company_tickers.json", max_age_days=7)
-            self._tickers = {
-                v["ticker"].upper(): {"cik": int(v["cik_str"]), "ticker": v["ticker"].upper(),
-                                      "name": v["title"]}
-                for v in raw.values()
-            }
+            primary: dict[int, dict] = {}
+            self._tickers = {}
+            for v in raw.values():
+                cik = int(v["cik_str"])
+                c = primary.setdefault(cik, {"cik": cik, "ticker": v["ticker"].upper(), "name": v["title"]})
+                self._tickers.setdefault(v["ticker"].upper(), c)
         return self._tickers
 
     def lookup(self, ticker: str) -> dict:

@@ -74,7 +74,7 @@ def test_parse_response_guards():
 def test_store_and_export(tmp_path):
     st = Store(tmp_path / "t.db")
     r = Resolver(SEC, aliases_path=tmp_path / "none.yaml")
-    ter = r.resolve("TER")
+    ter = r.resolve("Teradyne, Inc.")
     st.upsert_entity(ter)
     st.add_member("robotics", ter["id"], "Robot makers", True)
     rel = Relationship("NVIDIA Corporation", "supplies", "Teradyne", "GPUs supplied by NVIDIA", 0.9,

@@ -7,6 +7,7 @@ sentence so it can be checked against the filing later.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, asdict
 
 import requests
@@ -48,14 +49,23 @@ SCHEMA = {
     "required": ["relationships"],
 }
 
-SYSTEM = """You extract business relationships from SEC filing text.
+SYSTEM = """You extract business relationships between NAMED companies from SEC filing text.
 Rules:
 - The filer is "{company}". Use "{company}" as subject or object when the text says "we", "our" or "the Company".
-- Only extract relationships that NAME a specific organisation. Skip vague ones ("a supplier in Asia", "certain customers").
+- Every relationship must involve "{company}" on one side and a specific, NAMED organisation on the other
+  (a company, government agency or university with a proper name, e.g. "Advantest Corporation", "NASA").
+- Do NOT extract: unnamed or generic groups ("our five largest customers", "a supplier in Asia", "OEMs", "IDMs",
+  "contract manufacturers", "third-party vendors"), product or brand names (they are not companies),
+  countries or regions, industries or markets, or "doing business in" a place.
+- Direction matters:
+    supplies         = subject SELLS to object   ("NVIDIA supplies GPUs to {company}" -> NVIDIA supplies {company})
+    customer_of      = subject BUYS from object  ("{company} buys reducers from Nabtesco" -> {company} customer_of Nabtesco)
+    If "{company}" sells to a named customer, write "{company}" supplies <customer>.
 - relation must be one of: {relations}.
 - component: the product or part involved if stated (e.g. "GPUs", "lidar sensors"), else "".
 - evidence: copy the exact sentence from the text that supports it.
-- confidence: 0.0-1.0, how clearly the text states this relationship.
+- confidence: 0.0-1.0. Use 0.9+ only when the sentence names both parties and states the relationship outright;
+  0.5-0.8 when it is implied.
 - If there are none, return {{"relationships": []}}."""
 
 
@@ -106,11 +116,78 @@ class OllamaExtractor:
         r = requests.post(f"{self.url}/api/chat", json=body, timeout=self.timeout)
         r.raise_for_status()
         content = r.json().get("message", {}).get("content", "{}")
-        return parse_response(content, passage)
+        return parse_response(content, passage, company)
 
 
-def parse_response(content: str, passage: Passage) -> list[Relationship]:
-    """Validate model JSON; drop anything malformed or unsupported by the passage."""
+# ---------- quality filters (no LLM) ----------
+# Small models often ignore "skip unnamed counterparties", so these rules enforce it after the fact.
+
+# Lowercase words allowed inside a real organisation name ("Bank of America", "Rohde & Schwarz").
+_NAME_CONNECTORS = {"of", "and", "the", "for", "de", "du", "der", "und", "&", "a", "an", "in", "on", "at"}
+# Leading words that mark a generic phrase, not a name ("Five largest customers", "Certain suppliers").
+_GENERIC_LEAD = {"a", "an", "the", "our", "its", "their", "certain", "other", "various", "several", "some", "many",
+                 "one", "two", "three", "four", "five", "additional", "major", "key", "significant", "large",
+                 "largest", "leading", "third-party", "independent", "local", "global", "foreign", "domestic"}
+# Bare category nouns that the model sometimes returns as if they were companies.
+_GENERIC_NAMES = {"company", "the company", "customer", "customers", "supplier", "suppliers", "vendor", "vendors",
+                  "distributor", "distributors", "partner", "partners", "competitor", "competitors", "oem", "oems",
+                  "idm", "idms", "osat", "osats", "foundry", "foundries", "fabless", "government", "products",
+                  "subcontractors", "contract manufacturers", "u.s. government", "us government", "china", "asia",
+                  "europe", "japan", "taiwan", "korea", "united states"}
+
+
+def is_named_org(name: str) -> bool:
+    """True if `name` looks like a specific organisation, not a generic group or phrase."""
+    n = " ".join(name.replace("’", "'").split())
+    if len(n) < 2 or n.lower() in _GENERIC_NAMES:
+        return False
+    words = [w.strip(",.()") for w in n.split()]
+    if words[0].lower() in _GENERIC_LEAD:
+        return False
+    if re.fullmatch(r"[A-Z]{2,6}s", n):                  # plural acronyms: "OEMs", "IDMs", "OSATs"
+        return False
+    # Every word in a proper name starts uppercase/digit ("iTest", "eBay" style is fine),
+    # apart from short connectors. Rejects "business in China", "customer of our ... segment".
+    for w in words:
+        if w and w[0].islower() and w.lower() not in _NAME_CONNECTORS and not re.match(r"[a-z][A-Z]", w):
+            return False
+    return not (words[0].lower() in _NAME_CONNECTORS)    # can't start with "and", "of", ...
+
+
+def is_filer(name: str, company: str) -> bool:
+    """Does `name` refer to the filer itself ("Teradyne", "TERADYNE, INC", "we")?"""
+    from rapidfuzz import fuzz
+    from .resolve import normalize
+    if name.strip().lower() in {"we", "us", "our", "the company"}:
+        return True
+    a, b = normalize(name), normalize(company)
+    return bool(a and b) and (a == b or fuzz.token_set_ratio(a, b) >= 90)
+
+
+def keep_relationship(subject: str, obj: str, company: str | None, passage_text: str | None = None) -> bool:
+    """The rules every stored relationship must pass:
+    - with a known filer: one side is the filer and the other is a named organisation
+      (a 10-K describes the filer's own relationships; this drops "J750 supplies microcontrollers")
+    - the counterparty's name actually appears in the passage (hallucination guard), when we have it."""
+    if company:
+        if is_filer(subject, company):
+            other = obj
+        elif is_filer(obj, company):
+            other = subject
+        else:
+            return False
+        if is_filer(other, company):
+            return False                                 # self-loop
+        if not is_named_org(other):
+            return False
+        return passage_text is None or _mentioned(other, passage_text)
+    # Filer unknown: at least one side must be a named organisation found in the passage.
+    return any(is_named_org(x) and (passage_text is None or _mentioned(x, passage_text))
+               for x in (subject, obj))
+
+
+def parse_response(content: str, passage: Passage, company: str | None = None) -> list[Relationship]:
+    """Validate model JSON; drop anything malformed, generic, or unsupported by the passage."""
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
@@ -134,8 +211,7 @@ def parse_response(content: str, passage: Passage) -> list[Relationship]:
             continue
         if rel.subject.lower() == rel.object.lower():
             continue
-        # Hallucination guard: the object name must appear in the passage.
-        if not _mentioned(rel.object, passage.text) and not _mentioned(rel.subject, passage.text):
+        if not keep_relationship(rel.subject, rel.object, company, passage.text):
             continue
         out.append(rel)
     return out
@@ -233,5 +309,10 @@ def tag_company(extractor: "OllamaExtractor", company: str, business_text: str) 
 
 
 def _mentioned(name: str, text: str) -> bool:
-    first = name.split()[0].strip(",.").lower()
-    return len(first) > 2 and first in text.lower()
+    """Does the name's first distinctive word appear in the text as a whole word?
+    ("The Boeing Company" checks "boeing", not "the"; "Intel" doesn't match "intelligent".)"""
+    from .resolve import normalize
+    words = [w for w in normalize(name).split() if len(w) >= 3] or normalize(name).split()
+    if not words:
+        return False
+    return re.search(r"\b" + re.escape(words[0]) + r"\b", text, re.I) is not None

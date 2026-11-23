@@ -18,6 +18,7 @@ Web:
 Maintenance:
   itx review               names the resolver could not match (add them to aliases.yaml)
   itx reset-extract <ind>  re-queue an industry's filings
+  itx clean [--dry-run]    drop stored relationships that fail the quality filters (no LLM)
   itx neo4j robotics       (optional) mirror the graph into Neo4j Community
 """
 from __future__ import annotations
@@ -73,7 +74,7 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
     """Download one filing, extract relationships (and industry tags), store them.
     `row` needs: url, accession, form, company, entity_id."""
     from .edgar import EdgarError
-    from .extract import tag_company
+    from .extract import is_filer, tag_company
     from .sections import candidate_passages, html_to_text, split_sections
     try:
         html = ed.get(row["url"])
@@ -89,6 +90,9 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
         except Exception as e:
             print(f"    tagging failed: {e}")
     passages = candidate_passages(sections, keywords)[:max_passages]
+    # Re-processing a filing (--refresh, reset-extract) replaces what it produced before.
+    st.db.execute("DELETE FROM relationships WHERE accession=?", (row["accession"],))
+    filer = {"id": row["entity_id"], "method": "filer"}
     n_rel = 0
     for p in passages:
         try:
@@ -97,10 +101,15 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
             print(f"    passage {p.index}: {e}")
             continue
         for r in rels:
-            src, tgt = resolver.resolve(r.subject), resolver.resolve(r.object)
+            # The filer's own name always maps to the filer; everything else goes through the resolver.
+            src = filer if is_filer(r.subject, row["company"]) else resolver.resolve(r.subject)
+            tgt = filer if is_filer(r.object, row["company"]) else resolver.resolve(r.object)
+            if src["id"] == tgt["id"]:
+                continue  # e.g. "Universal Robots" is an alias of the filer (Teradyne)
             for raw, res in ((r.subject, src), (r.object, tgt)):
-                st.upsert_entity(res)
-                st.add_mention(raw, res)
+                if res is not filer:
+                    st.upsert_entity(res)
+                    st.add_mention(raw, res)
             st.add_relationship(src["id"], r.relation, tgt["id"], r, row["accession"], llm.model)
             n_rel += 1
     st.set_filing_status(row["accession"], "extracted")
@@ -266,6 +275,27 @@ def cmd_review(args) -> None:
     st.close()
 
 
+def cmd_clean(args) -> None:
+    """Apply the current quality filters to relationships already in the database (no LLM)."""
+    from .extract import keep_relationship
+    from .store import Store
+    st = Store()
+    rows = st.db.execute(
+        """SELECT r.id, r.raw_source, r.raw_target, r.source_id, r.target_id, e.name AS filer
+           FROM relationships r JOIN filings f ON f.accession = r.accession
+           JOIN entities e ON e.id = f.entity_id""").fetchall()
+    bad = [r["id"] for r in rows if r["source_id"] == r["target_id"]
+           or not keep_relationship(r["raw_source"] or "", r["raw_target"] or "", r["filer"])]
+    if args.dry_run:
+        for r in rows:
+            if r["id"] in set(bad):
+                print(f"  would drop: {r['raw_source']} -> {r['raw_target']}")
+    else:
+        st.db.executemany("DELETE FROM relationships WHERE id=?", [(i,) for i in bad])
+    st.close()
+    print(f"{len(bad)} of {len(rows)} relationships {'would be' if args.dry_run else ''} removed.")
+
+
 def cmd_reset(args) -> None:
     from .store import Store
     st = Store()
@@ -361,6 +391,8 @@ def main(argv: list[str] | None = None) -> None:
     sp = add("review", cmd_review, None)
     sp.add_argument("--limit", type=int, default=50)
     add("reset-extract", cmd_reset)
+    sp = add("clean", cmd_clean, None)
+    sp.add_argument("--dry-run", action="store_true", help="list what would be removed")
     for name, fn in (("export", cmd_export), ("neo4j", cmd_neo4j)):
         sp = add(name, fn)
         sp.add_argument("--min-conf", type=float, default=0.5)
