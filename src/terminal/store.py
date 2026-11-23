@@ -256,14 +256,21 @@ class Store:
         self.db.execute("INSERT INTO mentions (raw_name, entity_id, method) VALUES (?,?,?)",
                         (raw, resolved["id"], resolved["method"]))
 
-    def add_relationship(self, src: str, rel: str, tgt: str, r, accession: str, model: str) -> None:
-        self.db.execute(
+    def add_relationship(self, src: str, rel: str, tgt: str, r, accession: str, model: str) -> int | None:
+        """Insert a relationship; returns its row id (the existing row's id if it was already stored)."""
+        cur = self.db.execute(
             """INSERT OR IGNORE INTO relationships
                (source_id, relation, target_id, component, evidence, confidence, accession,
                 section, model, raw_source, raw_target) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (src, rel, tgt, r.component, r.evidence, r.confidence, accession, r.section, model,
              r.subject, r.object),
         )
+        if cur.rowcount:
+            return cur.lastrowid
+        row = self.db.execute(
+            """SELECT id FROM relationships WHERE source_id=? AND relation=? AND target_id=?
+               AND accession=? AND evidence=?""", (src, rel, tgt, accession, r.evidence)).fetchone()
+        return row["id"] if row else None
 
     def unresolved(self, limit: int = 50) -> list[sqlite3.Row]:
         return self.db.execute(

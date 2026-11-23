@@ -91,24 +91,75 @@ function fromApi(b) {
   });
   const all = links.flatMap((l) => [l.first, l.last]);
   const hi = all.length ? Math.max(...all) : THIS_YEAR, lo = all.length ? Math.min(...all, hi - 4) : hi - 4;
+  const centerNode = b.nodes.find((n) => n.id === b.center) || {};
   return { companies, links, competes, live: true, centerId: idOf[b.center], filings: b.filings || [],
+    extraction: b.extraction || { status: centerNode.expanded ? 'done' : 'not_started' },
     years: Array.from({ length: hi - lo + 1 }, (_, i) => lo + i) };
 }
 
-async function liveCompany(query) {
-  app.setState({ msg: 'Fetching ' + query + ' from SEC EDGAR…' });
+// quiet = a refresh while extraction runs: keep the user's selection / filters, no "Fetching" message.
+async function liveCompany(query, quiet) {
+  if (!quiet) app.setState({ msg: 'Fetching ' + query + ' from SEC EDGAR…' });
   const t0 = performance.now();
   try {
     const r = await fetch('/api/company/' + encodeURIComponent(query));
     const body = await r.json();
-    if (!r.ok) { app.setState({ msg: body.detail || 'Error ' + r.status }); return; }
-    LIVE = fromApi(body);
-    LIVE.loadedIn = ((performance.now() - t0) / 1000).toFixed(1);
-    $('xq').value = '';
-    app.state = { center: LIVE.centerId, sel: LIVE.centerId, depth: 1, msg: '' };
+    if (!r.ok) { if (!quiet) app.setState({ msg: body.detail || 'Error ' + r.status }); return; }
+    const next = fromApi(body);
+    if (quiet) {
+      if (!LIVE || LIVE.centerId !== next.centerId) return;   // user moved on to another company
+      next.loadedIn = LIVE.loadedIn;
+      LIVE = next;
+      if (!LIVE.companies.some((c) => c.id === app.state.sel)) app.state.sel = LIVE.centerId;
+    } else {
+      next.loadedIn = ((performance.now() - t0) / 1000).toFixed(1);
+      LIVE = next;
+      $('xq').value = '';
+      app.state = { center: LIVE.centerId, sel: LIVE.centerId, depth: 1, msg: '' };
+    }
     update();
+    if (!quiet) startExtraction(LIVE.centerId, LIVE.extraction);
   } catch (e) {
-    app.setState({ msg: 'API not reachable. Is `itx serve` running?' });
+    if (!quiet) app.setState({ msg: 'API not reachable. Is `itx serve` running?' });
+  }
+}
+
+// ---- background extraction: start it, poll progress, redraw the network as relationships arrive ----
+let LLM = { ready: false, problem: null };   // from /api/health
+let pollToken = 0;
+
+async function startExtraction(ticker, state, refresh) {
+  let s = state;
+  if (refresh || (s.status === 'not_started' && LLM.ready)) {
+    try {
+      const r = await fetch('/api/extract/' + encodeURIComponent(ticker) + (refresh ? '?refresh=true' : ''), { method: 'POST' });
+      s = await r.json();
+      if (!r.ok) s = { status: 'failed', error: s.detail || 'Error ' + r.status };
+    } catch (e) { s = { status: 'failed', error: 'API not reachable.' }; }
+    setJob(ticker, s);
+  }
+  if (s.status === 'queued' || s.status === 'running') poll(ticker, s.found || 0);
+}
+
+function setJob(ticker, s) {
+  if (LIVE && LIVE.centerId === ticker) { LIVE.extraction = s; update(); }
+}
+
+async function poll(ticker, seen) {
+  const token = ++pollToken;                  // a newer search/poll cancels this one
+  let found = seen;
+  while (token === pollToken) {
+    await new Promise((res) => setTimeout(res, 1500));
+    if (token !== pollToken || !LIVE || LIVE.centerId !== ticker) return;
+    let s;
+    try { s = await (await fetch('/api/jobs/' + encodeURIComponent(ticker))).json(); } catch (e) { continue; }
+    const finished = s.status === 'done' || s.status === 'failed';
+    if ((s.found || 0) > found || finished) {  // new relationships (or the end): redraw from the database
+      found = s.found || 0;
+      await liveCompany(ticker, true);
+    }
+    setJob(ticker, s);
+    if (finished) return;
   }
 }
 
@@ -365,9 +416,16 @@ class Component extends DCLogic {
         meta: (c.country ? 'HQ ' + c.country + ' · ' : '') + (c.listed ? 'SIC ' + (c.sic || 'code loads from EDGAR') : 'not an SEC filer'),
         fin: c.fin || null,
         filings: D.live && selId === D.centerId ? D.filings : [],
-        note: D.live && selId === D.centerId && !ins.length && !outs.length && !comN(selId).length
-          ? (c.expanded ? 'No named relationships found in its latest annual report.'
-                        : 'Relationships appear once its annual report has been read by the LLM (next step: background extraction).') : '',
+        // Extraction state of the searched company (live data only): drives the progress block.
+        job: D.live && selId === D.centerId ? (D.extraction || { status: 'done' }) : null,
+        rereadPick: () => startExtraction(D.centerId, { status: 'not_started' }, true),
+        note: (() => {
+          if (!D.live || selId !== D.centerId) return '';
+          const st = (D.extraction || {}).status, none = !ins.length && !outs.length && !comN(selId).length;
+          if (st === 'not_started') return LLM.ready ? '' : 'To read its annual report, start Ollama (' + (LLM.problem || 'not reachable') + ').';
+          if (st === 'done' && none) return 'No named suppliers, customers, partners or competitors found in its latest annual report.';
+          return '';
+        })(),
         badge: 'width:52px;height:52px;flex:none;border-radius:14px;background:' + colOf(main(c)) + ';color:#FFFFFF;display:flex;align-items:center;justify-content:center;font:600 20px Space Grotesk,sans-serif',
         tags: c.tags.map(([t, r]) => ({ tag: t, role: r, pick: setTag(t), dot: 'width:8px;height:8px;border-radius:3px;background:' + colOf(t), style: 'min-height:30px;padding:0 10px;display:inline-flex;align-items:center;gap:6px;border-radius:8px;border:1px solid ' + (t === tag ? '#111827' : '#DDE1E8') + ';background:#FFFFFF;font:12px Inter,sans-serif;color:#111827;cursor:pointer' })),
         makesLabel: 'Components it supplies', makes: Array.from(new Set(outs.filter(isSupply).map((l) => l.comp).filter(Boolean))).map(compBtn),
@@ -516,6 +574,36 @@ function finTable(h) {
     '<div class="mono" style="display:grid;grid-template-columns:minmax(0,1fr) auto 60px 44px;gap:3px 10px;align-items:center;font-size:12px;color:#111827">' + rows + '</div></div>';
 }
 
+// ---- extraction progress block in the profile panel ----
+const STEP_LABEL = { queued: 'Queued', starting: 'Starting', downloading: 'Downloading the annual report',
+  tagging: 'Classifying its industries', reading: 'Reading the annual report', done: 'Done' };
+
+function jobBlock(P) {
+  const j = P.job;
+  if (!j) return '';
+  const box = (inner, bg, border) => '<div style="background:' + bg + ';border:1px solid ' + border + ';border-radius:10px;padding:10px 12px;font-size:13px;color:#374151;line-height:1.5">' + inner + '</div>';
+  if (j.status === 'queued' || j.status === 'running') {
+    const pct = j.total ? Math.round(100 * j.done / j.total) : (j.status === 'queued' ? 0 : 4);
+    const what = j.status === 'queued'
+      ? 'Queued' + (j.ahead ? ' · ' + j.ahead + ' compan' + (j.ahead === 1 ? 'y' : 'ies') + ' ahead' : '')
+      : (STEP_LABEL[j.step] || 'Working') + (j.step === 'reading' && j.total ? ' · passage ' + (j.done + 1) + ' of ' + j.total : '') + '…';
+    return box('<div style="font-weight:500;color:#111827">' + esc(what) + '</div>' +
+      '<div style="height:6px;background:#E5E7EB;border-radius:999px;margin:8px 0 6px;overflow:hidden"><div style="height:100%;width:' + pct + '%;background:#4F46E5;border-radius:999px;transition:width .4s"></div></div>' +
+      '<div class="mono" style="font-size:12px;color:#4B5563">' + (j.found || 0) + ' relationship' + (j.found === 1 ? '' : 's') + ' found so far · the map fills in as they arrive</div>',
+      '#EEF0FF', '#C7CBF5');
+  }
+  if (j.status === 'failed') {
+    return box('<div style="color:#B91C1C;font-weight:500">Reading the annual report failed</div><div>' + esc(j.error || 'Unknown error') + '</div>' +
+      btn({ pick: P.rereadPick, style: 'margin-top:8px;height:32px;padding:0 12px;border-radius:8px;border:1px solid #DDE1E8;background:#fff;font:500 12px Inter,sans-serif;cursor:pointer' }, 'Retry'),
+      '#FEF2F2', '#FECACA');
+  }
+  if (j.status === 'done' && LLM.ready) {
+    return '<div style="font-size:12px;color:#6B7280">Relationships read from its latest annual report · ' +
+      btn({ pick: P.rereadPick, style: 'border:none;background:none;padding:0;color:#4F46E5;font:12px Inter,sans-serif;cursor:pointer;text-decoration:underline' }, 'read again') + '</div>';
+  }
+  return '';
+}
+
 function update() {
   H = [];
   const V = app.renderVals();
@@ -566,6 +654,7 @@ function update() {
     '<div><div style="font-size:12px;color:#4B5563;margin-bottom:8px">' + esc(P.makesLabel) + '</div><div style="display:flex;flex-wrap:wrap;gap:6px">' + chipList(P.makes, true) + '</div>' + (P.makesEmpty ? '<div style="font-size:13px;color:#6B7280">None named</div>' : '') + '</div>' +
     '<div><div style="font-size:12px;color:#4B5563;margin-bottom:8px">' + esc(P.buysLabel) + '</div><div style="display:flex;flex-wrap:wrap;gap:6px">' + chipList(P.buys, false) + '</div>' + (P.buysEmpty ? '<div style="font-size:13px;color:#6B7280">None named</div>' : '') + '</div>' +
     '<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">' + P.stats.map((k) => '<div style="background:#F5F6F9;border-radius:10px;padding:10px"><div style="font-size:11px;color:#4B5563">' + esc(k.label) + '</div><div style="' + esc(k.style) + '">' + esc(k.value) + '</div></div>').join('') + '</div>' +
+    jobBlock(P) +
     (P.note ? '<div style="font-size:13px;color:#4B5563;background:#F5F6F9;border-radius:10px;padding:10px 12px;line-height:1.5">' + esc(P.note) + '</div>' : '') +
     (P.canCenter ? btn({ pick: P.center, style: 'height:44px;border-radius:10px;border:none;background:#4F46E5;color:#fff;font:600 14px Inter,sans-serif;cursor:pointer' }, esc(P.centerLabel)) : '') +
     (P.fin && Object.keys(P.fin).length ? finTable(P.fin) : '') +
@@ -626,6 +715,7 @@ update();
 fetch('/api/health').then((r) => r.json()).then((h) => {
   if (!h.ok) return;
   API = true;
+  LLM = { ready: !!h.llm_ready, problem: h.llm_problem || null };
   $('xq').placeholder = 'Any US-listed company: ticker or name';
   $('xq').focus();
   update();

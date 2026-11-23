@@ -70,11 +70,16 @@ def add_company(ed, st, info: dict, years: int, segment=None, industry=None, see
     return ent["id"]
 
 
-def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, tag=True) -> int:
+def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, tag=True,
+                   progress=None) -> int:
     """Download one filing, extract relationships (and industry tags), store them.
-    `row` needs: url, accession, form, company, entity_id."""
+    `row` needs: url, accession, form, company, entity_id.
+    `progress(step, done, total, found)`, if given, is called as work advances (used by the API's
+    background jobs); relationships are committed after every passage so they can be shown live."""
+    report = progress or (lambda *a: None)
+    report("downloading", 0, 0, 0)
     from .edgar import EdgarError
-    from .extract import is_filer, tag_company
+    from .extract import is_filer, keep_relationship, tag_company
     from .sections import candidate_passages, html_to_text, split_sections
     try:
         html = ed.get(row["url"])
@@ -84,23 +89,32 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
         return 0
     sections = split_sections(html_to_text(html), row["form"])
     if tag:
+        report("tagging", 0, 0, 0)
         business = sections.get("business") or sections.get("f20_info") or next(iter(sections.values()))
         try:
             st.add_tags(row["entity_id"], tag_company(llm, row["company"], business), row["accession"])
         except Exception as e:
             print(f"    tagging failed: {e}")
     passages = candidate_passages(sections, keywords)[:max_passages]
-    # Re-processing a filing (--refresh, reset-extract) replaces what it produced before.
-    st.db.execute("DELETE FROM relationships WHERE accession=?", (row["accession"],))
+    # Re-processing a filing (--refresh, "read again") replaces what it produced before, but only
+    # at the end: old relationships stay visible meanwhile, and survive if this run fails.
+    old_ids = {r[0] for r in st.db.execute("SELECT id FROM relationships WHERE accession=?",
+                                           (row["accession"],))}
+    kept: set[int] = set()
     filer = {"id": row["entity_id"], "method": "filer"}
+    st.db.commit()
     n_rel = 0
-    for p in passages:
+    for i, p in enumerate(passages):
+        report("reading", i, len(passages), n_rel)
         try:
             rels = llm.extract(row["company"], p)
         except Exception as e:  # network / timeout: keep going
             print(f"    passage {p.index}: {e}")
             continue
         for r in rels:
+            # Same quality rules as parse_response, enforced here too so no extractor can bypass them.
+            if not keep_relationship(r.subject, r.object, row["company"], p.text):
+                continue
             # The filer's own name always maps to the filer; everything else goes through the resolver.
             src = filer if is_filer(r.subject, row["company"]) else resolver.resolve(r.subject)
             tgt = filer if is_filer(r.object, row["company"]) else resolver.resolve(r.object)
@@ -110,11 +124,15 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
                 if res is not filer:
                     st.upsert_entity(res)
                     st.add_mention(raw, res)
-            st.add_relationship(src["id"], r.relation, tgt["id"], r, row["accession"], llm.model)
+            kept.add(st.add_relationship(src["id"], r.relation, tgt["id"], r, row["accession"], llm.model))
             n_rel += 1
+        st.db.commit()   # each passage's results become visible right away
+    # Finished: drop old relationships this run didn't find again.
+    st.db.executemany("DELETE FROM relationships WHERE id=?", [(i,) for i in old_ids - kept])
     st.set_filing_status(row["accession"], "extracted")
     st.mark_expanded(row["entity_id"])
     st.db.commit()
+    report("done", len(passages), len(passages), n_rel)
     print(f"  {row['company'][:40]:40} {row['form']} {len(passages)} passages -> {n_rel} relationships")
     return n_rel
 
