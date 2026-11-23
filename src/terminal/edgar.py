@@ -176,25 +176,89 @@ class Edgar:
         return hits
 
 
-# XBRL concept names to try, in order, for headline financials.
-XBRL_CONCEPTS = {
-    "revenue": ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax",
-                "SalesRevenueNet"],
-    "net_income": ["NetIncomeLoss"],
-    "rnd": ["ResearchAndDevelopmentExpense"],
+# XBRL metrics from the annual financial statements (Item 8).
+#   concepts: us-gaap names to try. Companies tag the same thing differently, and many
+#             switched names over time (e.g. Revenues -> RevenueFromContract... after 2018),
+#             so all of them are merged into one series. Earlier names win on a tie.
+#   kind:     "duration" = measured over a period (income / cash flow statement), must be ~1 year
+#             "instant"  = a balance at one date (balance sheet)
+#   unit:     XBRL unit key
+XBRL_METRICS: dict[str, dict] = {
+    # Income statement
+    "revenue": {"kind": "duration", "unit": "USD", "concepts": [
+        "RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
+        "RevenueFromContractWithCustomerIncludingAssessedTax", "SalesRevenueNet",
+        "SalesRevenueGoodsNet"]},
+    "gross_profit": {"kind": "duration", "unit": "USD", "concepts": ["GrossProfit"]},
+    "operating_income": {"kind": "duration", "unit": "USD", "concepts": ["OperatingIncomeLoss"]},
+    "net_income": {"kind": "duration", "unit": "USD", "concepts": ["NetIncomeLoss"]},
+    "rnd": {"kind": "duration", "unit": "USD", "concepts": [
+        "ResearchAndDevelopmentExpense",
+        "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"]},
+    "eps_diluted": {"kind": "duration", "unit": "USD/shares", "concepts": ["EarningsPerShareDiluted"]},
+    # Balance sheet
+    "cash": {"kind": "instant", "unit": "USD", "concepts": [
+        "CashAndCashEquivalentsAtCarryingValue",
+        "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]},
+    "total_assets": {"kind": "instant", "unit": "USD", "concepts": ["Assets"]},
+    "total_liabilities": {"kind": "instant", "unit": "USD", "concepts": ["Liabilities"]},
+    "equity": {"kind": "instant", "unit": "USD", "concepts": [
+        "StockholdersEquity",
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]},
+    "long_term_debt": {"kind": "instant", "unit": "USD", "concepts": [
+        "LongTermDebtNoncurrent", "LongTermDebt"]},
+    # Cash flow statement
+    "operating_cash_flow": {"kind": "duration", "unit": "USD", "concepts": [
+        "NetCashProvidedByUsedInOperatingActivities"]},
+    "capex": {"kind": "duration", "unit": "USD", "concepts": [
+        "PaymentsToAcquirePropertyPlantAndEquipment"]},
 }
+
+ANNUAL_FORMS = ("10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A")
+
+
+def _days(start: str, end: str) -> int:
+    from datetime import date
+    return (date.fromisoformat(end) - date.fromisoformat(start)).days
+
+
+def annual_series(facts: dict, years: int = 5) -> dict[str, list[dict]]:
+    """Per metric, the last `years` fiscal-year values, newest first:
+    {"revenue": [{"period_end", "value", "concept", "filed", "accession"}, ...], ...}
+
+    - Merges every concept name for a metric, so a company that changed tags still
+      gets an up-to-date series.
+    - Duration metrics keep only ~12-month periods (drops quarters inside 10-Ks).
+    - If the same period appears in several filings, the latest-filed value wins (restatements).
+    """
+    gaap = facts.get("facts", {}).get("us-gaap", {})
+    out: dict[str, list[dict]] = {}
+    for metric, spec in XBRL_METRICS.items():
+        by_end: dict[str, dict] = {}
+        for rank, concept in enumerate(spec["concepts"]):
+            for u in gaap.get(concept, {}).get("units", {}).get(spec["unit"], []):
+                if u.get("form") not in ANNUAL_FORMS or "end" not in u or "val" not in u:
+                    continue
+                if spec["kind"] == "duration":
+                    if "start" not in u or not 350 <= _days(u["start"], u["end"]) <= 380:
+                        continue
+                cand = {"period_end": u["end"], "value": u["val"], "concept": concept,
+                        "filed": u.get("filed", ""), "accession": u.get("accn"), "_rank": rank}
+                cur = by_end.get(u["end"])
+                # Keep the preferred concept; within the same concept, the latest filing.
+                if (cur is None or rank < cur["_rank"]
+                        or (rank == cur["_rank"] and cand["filed"] > cur["filed"])):
+                    by_end[u["end"]] = cand
+        if by_end:
+            rows = sorted(by_end.values(), key=lambda r: r["period_end"], reverse=True)[:years]
+            for r in rows:
+                r.pop("_rank")
+            out[metric] = rows
+    return out
 
 
 def headline_financials(facts: dict) -> dict:
-    """Latest annual (10-K, FY) USD value per metric from a companyfacts payload."""
-    gaap = facts.get("facts", {}).get("us-gaap", {})
-    out = {}
-    for metric, concepts in XBRL_CONCEPTS.items():
-        for c in concepts:
-            units = gaap.get(c, {}).get("units", {}).get("USD", [])
-            annual = [u for u in units if u.get("fp") == "FY" and u.get("form", "").startswith("10-K")]
-            if annual:
-                latest = max(annual, key=lambda u: u.get("end", ""))
-                out[metric] = {"value": latest["val"], "period_end": latest["end"], "concept": c}
-                break
-    return out
+    """Latest fiscal-year value per metric: {"revenue": {"value", "period_end", "concept"}, ...}.
+    This is what the viewer's company panel shows."""
+    return {m: {"value": s[0]["value"], "period_end": s[0]["period_end"], "concept": s[0]["concept"]}
+            for m, s in annual_series(facts, years=1).items()}
