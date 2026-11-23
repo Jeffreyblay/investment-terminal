@@ -4,7 +4,7 @@ import json
 import pytest
 
 from terminal.edgar import Edgar
-from terminal.extract import _mentioned, is_filer, is_named_org, keep_relationship, parse_response
+from terminal.extract import Relationship, _mentioned, is_filer, is_named_org, keep_relationship, parse_response, review
 from terminal.resolve import Resolver
 from terminal.sections import Passage
 
@@ -51,7 +51,7 @@ def test_parse_response_applies_filters_with_filer():
     p = Passage("risk_factors", 3, "Competitors include Advantest Corporation. Our five largest customers "
                                    "accounted for 44% of revenue.")
     items = [
-        {"subject": FILER, "relation": "competes_with", "object": "Advantest Corporation", "evidence": "x", "confidence": 1},
+        {"subject": FILER, "relation": "competes_with", "object": "Advantest Corporation", "evidence": "Competitors include Advantest Corporation.", "confidence": 1},
         {"subject": FILER, "relation": "customer_of", "object": "five largest customers", "evidence": "x", "confidence": 1},
         {"subject": FILER, "relation": "competes_with", "object": "Keysight", "evidence": "x", "confidence": 1},  # not in text
     ]
@@ -80,3 +80,51 @@ def test_primary_ticker_is_used_for_every_share_class(tmp_path, monkeypatch):
     t = ed.tickers()
     assert t["GOOG"]["ticker"] == "GOOGL" and t["GOOGL"]["ticker"] == "GOOGL"
     assert len({c["cik"] for c in ed.search("goo")}) == 1      # one result per company
+
+
+# ---------- relation must match the evidence (real Rocket Lab output) ----------
+RKLB = "Rocket Lab Corp"
+ACQ = ("We entered this market with our acquisition of leading spacecraft components manufacturer Sinclair "
+       "Interplanetary and have since expanded our market participation with the acquisitions of Advanced Solutions, "
+       "Incorporated, Planetary Systems Corporation, SolAero Technologies Corp. and GEOST.")
+
+
+def rel(subject, relation, obj, evidence):
+    return Relationship(subject, relation, obj, evidence, 0.9)
+
+
+@pytest.mark.parametrize("target", ["Sinclair Interplanetary", "Advanced Solutions, Incorporated",
+                                    "Planetary Systems Corporation", "SolAero Technologies Corp", "GEOST"])
+def test_acquisitions_are_relabelled(target):
+    out = review(rel(RKLB, "supplies", target, ACQ), RKLB)
+    assert out and out.relation == "acquired" and out.subject == RKLB and out.object == target
+
+
+def test_acquired_by_points_the_other_way():
+    out = review(rel("Teradyne", "partners_with", "Big Holdings Inc.", "In 2025 we were acquired by Big Holdings Inc."), "Teradyne")
+    assert out.relation == "acquired" and out.subject == "Big Holdings Inc." and out.object == "Teradyne"
+
+
+def test_product_and_place_sentences_are_dropped():
+    photon = ("Photon can be configured to operate as the upper stage of Electron (the kick stage) during launch, "
+              "then with a simple command, transition into an operational spacecraft on orbit.")
+    wallops = "On January 24, 2023, we successfully launched our first Electron from NASA Wallops Flight Facility."
+    assert review(rel(RKLB, "supplies", "Photon", photon), RKLB) is None
+    assert review(rel(RKLB, "supplies", "NASA Wallops Flight Facility", wallops), RKLB) is None
+
+
+def test_real_relations_with_cues_are_kept():
+    assert review(rel("NVIDIA Corporation", "supplies", "Teradyne", "Our controllers use GPUs supplied by NVIDIA."), "Teradyne")
+    assert review(rel(RKLB, "supplies", "NASA", "We launched the CAPSTONE mission for NASA under a contract."), RKLB)
+    assert review(rel("Teradyne", "competes_with", "Advantest", "Competitors include Advantest."), "Teradyne")
+    assert review(rel("Symbotic Inc.", "supplies", "Walmart Inc.", "Walmart accounted for 87% of our revenue."), "Symbotic Inc.")
+
+
+def test_competitor_list_with_cue_in_the_paragraph():
+    ev = ("Companies that have introduced products in the field of robotic-assisted medical procedures include: "
+          "CMR Surgical Ltd.; Distalmotion SA; Medicaroid Corporation.")
+    para = "We face competition in robotic surgery. " + ev
+    r = rel("INTUITIVE SURGICAL INC", "competes_with", "CMR Surgical Ltd.", ev)
+    assert review(r, "INTUITIVE SURGICAL INC", para)                 # cue in the paragraph
+    assert review(r, "INTUITIVE SURGICAL INC")                       # itx clean: no paragraph, kept
+    assert review(r, "INTUITIVE SURGICAL INC", ev) is None           # no cue anywhere: dropped

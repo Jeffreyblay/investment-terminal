@@ -186,6 +186,71 @@ def keep_relationship(subject: str, obj: str, company: str | None, passage_text:
                for x in (subject, obj))
 
 
+# The evidence sentence must contain a cue for the relation it supports. Drops cases like
+# "Photon can be configured as an upper stage" (a product description) or "we launched from
+# NASA Wallops" (a place), which the model labelled `supplies`.
+RELATION_CUES = {rel: re.compile(r"\b(?:" + pat + ")", re.I) for rel, pat in {
+    "supplies": r"suppl|customer|client|sell|sold|sale|purchas|buy|bought|order|contract|deliver|provid|revenue"
+                r"|vendor|sourc|distribut|ship|launch\w* for|award|use[sd]? (?:our|its)",
+    "customer_of": r"suppl|customer|client|sell|sold|sale|purchas|buy|bought|order|contract|deliver|provid|revenue"
+                   r"|vendor|sourc|distribut|depend|rel(?:y|ies|iance) on|use[sd]?",
+    "manufactures_for": r"manufactur|foundr|fabricat|assembl|produc|suppl|contract",
+    "competes_with": r"compet|rival|alternative|market share",
+    "partners_with": r"partner|collaborat|joint venture|alliance|agreement|licens|work(?:s|ed|ing)? (?:closely )?with"
+                     r"|team|integrat|cooperat",
+    "acquired": r"acqui|merger|merged|purchase of",
+    "invested_in": r"invest|stake|equity|shares|stock|ownership",
+    "subsidiary_of": r"subsidiar|owned|parent|unit of|division of",
+    "contracted_by": r"contract|award|task order|agreement|selected|funded|grant",
+}.items()}
+
+_ACQ = re.compile(r"\b(acquisitions? of|acquired by|acquired)\b", re.I)
+
+
+def _acquisition_side(name: str, evidence: str) -> str | None:
+    """'filer' if the evidence says the filer acquired `name` ("our acquisition of X", "we acquired X"),
+    'other' if `name` acquired the filer ("we were acquired by X"), else None."""
+    from .resolve import normalize
+    words = [w for w in normalize(name).split() if len(w) >= 3] or normalize(name).split()
+    if not words:
+        return None
+    for m in _ACQ.finditer(evidence):
+        after = evidence[m.end(): m.end() + 300]
+        if re.search(r"\b" + re.escape(words[0]) + r"\b", after, re.I):
+            return "other" if m.group(1).lower() == "acquired by" else "filer"
+    return None
+
+
+def review(rel: Relationship, company: str | None, passage_text: str | None = None) -> Relationship | None:
+    """Every quality rule in one place; returns the relationship (possibly relabelled) or None to drop it.
+    1. keep_relationship: filer on one side, a named organisation on the other, found in the passage
+    2. acquisitions: "our acquisition of X" becomes <filer> acquired X, whatever the model called it
+    3. the evidence sentence must contain a cue for the relation (RELATION_CUES)"""
+    from dataclasses import replace
+    if not keep_relationship(rel.subject, rel.object, company, passage_text):
+        return None
+    ev = rel.evidence or ""
+    if company:
+        other = rel.object if is_filer(rel.subject, company) else rel.subject
+        side = _acquisition_side(other, ev)
+        if side == "filer":
+            rel = replace(rel, relation="acquired", subject=company, object=other)
+        elif side == "other":
+            rel = replace(rel, relation="acquired", subject=other, object=company)
+    cue = RELATION_CUES.get(rel.relation)
+    if cue is None:
+        return None
+    if rel.relation == "competes_with":
+        # Competitor lists are often introduced elsewhere in the paragraph ("Companies that have
+        # introduced products in the field ... include: A; B; C"), so the cue may be anywhere in the
+        # passage. Without the passage (itx clean) competitors aren't dropped on this rule.
+        if passage_text is not None and not cue.search(ev + " " + passage_text):
+            return None
+    elif not cue.search(ev):
+        return None
+    return rel
+
+
 def parse_response(content: str, passage: Passage, company: str | None = None) -> list[Relationship]:
     """Validate model JSON; drop anything malformed, generic, or unsupported by the passage."""
     try:
@@ -211,9 +276,9 @@ def parse_response(content: str, passage: Passage, company: str | None = None) -
             continue
         if rel.subject.lower() == rel.object.lower():
             continue
-        if not keep_relationship(rel.subject, rel.object, company, passage.text):
-            continue
-        out.append(rel)
+        rel = review(rel, company, passage.text)
+        if rel:
+            out.append(rel)
     return out
 
 

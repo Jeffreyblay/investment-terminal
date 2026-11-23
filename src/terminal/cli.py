@@ -79,7 +79,7 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
     report = progress or (lambda *a: None)
     report("downloading", 0, 0, 0)
     from .edgar import EdgarError
-    from .extract import is_filer, keep_relationship, tag_company
+    from .extract import is_filer, review, tag_company
     from .sections import candidate_passages, html_to_text, split_sections
     try:
         html = ed.get(row["url"])
@@ -113,7 +113,8 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
             continue
         for r in rels:
             # Same quality rules as parse_response, enforced here too so no extractor can bypass them.
-            if not keep_relationship(r.subject, r.object, row["company"], p.text):
+            r = review(r, row["company"], p.text)
+            if r is None:
                 continue
             # The filer's own name always maps to the filer; everything else goes through the resolver.
             src = filer if is_filer(r.subject, row["company"]) else resolver.resolve(r.subject)
@@ -295,23 +296,40 @@ def cmd_review(args) -> None:
 
 def cmd_clean(args) -> None:
     """Apply the current quality filters to relationships already in the database (no LLM)."""
-    from .extract import keep_relationship
+    import sqlite3
+
+    from .extract import Relationship, review
     from .store import Store
     st = Store()
     rows = st.db.execute(
-        """SELECT r.id, r.raw_source, r.raw_target, r.source_id, r.target_id, e.name AS filer
-           FROM relationships r JOIN filings f ON f.accession = r.accession
+        """SELECT r.*, e.name AS filer FROM relationships r JOIN filings f ON f.accession = r.accession
            JOIN entities e ON e.id = f.entity_id""").fetchall()
-    bad = [r["id"] for r in rows if r["source_id"] == r["target_id"]
-           or not keep_relationship(r["raw_source"] or "", r["raw_target"] or "", r["filer"])]
-    if args.dry_run:
-        for r in rows:
-            if r["id"] in set(bad):
-                print(f"  would drop: {r['raw_source']} -> {r['raw_target']}")
-    else:
-        st.db.executemany("DELETE FROM relationships WHERE id=?", [(i,) for i in bad])
+    dropped = relabelled = 0
+    for r in rows:
+        rel = Relationship(r["raw_source"] or "", r["relation"], r["raw_target"] or "", r["evidence"] or "",
+                           r["confidence"] or 0)
+        new = None if r["source_id"] == r["target_id"] else review(rel, r["filer"])
+        if new is None:
+            dropped += 1
+            print(f"  drop:    {r['raw_source']} --{r['relation']}--> {r['raw_target']}")
+            if not args.dry_run:
+                st.db.execute("DELETE FROM relationships WHERE id=?", (r["id"],))
+            continue
+        if new.relation != rel.relation or new.subject != rel.subject:
+            relabelled += 1
+            # review() may flip the direction ("acquired by"): swap ids to match.
+            flip = new.object == rel.subject
+            src, tgt = (r["target_id"], r["source_id"]) if flip else (r["source_id"], r["target_id"])
+            print(f"  relabel: {r['raw_source']} --{r['relation']}--> {r['raw_target']}  =>  {new.relation}")
+            if not args.dry_run:
+                try:
+                    st.db.execute("UPDATE relationships SET relation=?, source_id=?, target_id=? WHERE id=?",
+                                  (new.relation, src, tgt, r["id"]))
+                except sqlite3.IntegrityError:   # the corrected row already exists
+                    st.db.execute("DELETE FROM relationships WHERE id=?", (r["id"],))
     st.close()
-    print(f"{len(bad)} of {len(rows)} relationships {'would be' if args.dry_run else ''} removed.")
+    verb = "would be" if args.dry_run else "were"
+    print(f"{len(rows)} relationships: {dropped} {verb} removed, {relabelled} {verb} relabelled.")
 
 
 def cmd_reset(args) -> None:
