@@ -86,7 +86,9 @@ function fromApi(b) {
     if (e.relation === 'competes_with') { competes.push([a, t, e.confidence]); return; }
     const ys = (e.citations || []).map((c) => yearOf(c.filed)).filter(Boolean);
     links.push({ from: a, to: t, rel: e.relation, comp: (e.components || [])[0] || null,   // only components the filing named
-      imp: null, country: null, conf: e.confidence,
+      // importance.py: 'major' customer (thick line) / 'single_source' supplier (red line)
+      imp: e.importance === 'single_source' ? 'single' : (e.importance === 'major' ? 'major' : null),
+      pct: e.revenue_pct == null ? null : e.revenue_pct, country: null, conf: e.confidence,
       first: ys.length ? Math.min(...ys) : THIS_YEAR, last: ys.length ? Math.max(...ys) : THIS_YEAR });
   });
   const all = links.flatMap((l) => [l.first, l.last]);
@@ -439,7 +441,8 @@ class Component extends DCLogic {
     // ----- table -----
     const mono = 'font:13px IBM Plex Mono,monospace';
     const cell = (text, style) => ({ text: String(text), style: (style || '') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap' });
-    const impCell = (imp) => imp === 'major' ? cell('≥10% revenue', 'color:#4F46E5;font-weight:500') : (imp === 'single' ? cell('Single source', 'color:#DC2626;font-weight:500') : cell('Mentioned', 'color:#6B7280'));
+    // Importance: the revenue share when the report gives one ("87% of revenue"), else the sample's wording.
+    const impCell = (imp, pct) => imp === 'major' ? cell(pct != null ? pct + '% of revenue' : 'Major customer', 'color:#4F46E5;font-weight:500') : (imp === 'single' ? cell('Single source', 'color:#DC2626;font-weight:500') : cell('Mentioned', 'color:#6B7280'));
     const seenCell = (l) => cell((l.first === l.last ? l.first : l.first + '–' + l.last) + (l.stale ? ' · stale' : ''), l.stale ? 'color:#9CA3AF' : 'color:#374151');
     const rowStyle = (cols, on) => 'width:100%;display:grid;grid-template-columns:' + cols + ';gap:10px;padding:0 16px;min-height:38px;align-items:center;border:none;border-bottom:1px solid #F1F3F7;background:' + (on ? '#EEF0FF' : '#FFFFFF') + ';' + mono + ';color:#111827;text-align:left;cursor:pointer';
     let colsDef, head, rows = [], title, count;
@@ -458,7 +461,7 @@ class Component extends DCLogic {
     } else if (comp) {
       colsDef = '64px minmax(0,1fr) 64px minmax(0,1fr) 120px 90px 120px 60px'; head = ['MAKER', '', 'BUYER', '', 'IMPORTANCE', 'MADE IN', 'SEEN', 'CONF'];
       rows = active.filter((l) => l.comp === comp && hop[l.from] != null && hop[l.to] != null).map((l) => ({ pick: pick(l.from), style: rowStyle(colsDef, l.from === selId || l.to === selId),
-        cells: [cell(tick(l.from), 'color:#4F46E5;font-weight:500'), cell(byId[l.from].name, 'font-family:Inter,sans-serif'), cell(tick(l.to), 'color:#4F46E5;font-weight:500'), cell(byId[l.to].name, 'font-family:Inter,sans-serif'), impCell(l.imp), cell(l.country || '–'), seenCell(l), cell(linkConf(l).toFixed(2))] }));
+        cells: [cell(tick(l.from), 'color:#4F46E5;font-weight:500'), cell(byId[l.from].name, 'font-family:Inter,sans-serif'), cell(tick(l.to), 'color:#4F46E5;font-weight:500'), cell(byId[l.to].name, 'font-family:Inter,sans-serif'), impCell(l.imp, l.pct), cell(l.country || '–'), seenCell(l), cell(linkConf(l).toFixed(2))] }));
       title = 'Supply of ' + comp; count = rows.length + ' links';
     } else {
       colsDef = '60px 110px minmax(0,1fr) minmax(0,1fr) 116px 84px 116px 48px'; head = ['TICKER', 'RELATION', 'COUNTERPARTY', 'COMPONENT', 'IMPORTANCE', 'MADE IN', 'SEEN', 'CONF'];
@@ -469,7 +472,7 @@ class Component extends DCLogic {
       rows = r.map(([x, rel, color, l]) => ({ pick: pick(x), style: rowStyle(colsDef, false),
         cells: [cell(tick(x), 'color:#4F46E5;font-weight:500'), cell(rel, 'color:' + color), cell(byId[x].name, 'font-family:Inter,sans-serif'),
           l && isSupply(l) && l.comp ? cell(l.comp,'font-family:Inter,sans-serif;color:#374151;text-decoration:underline') : cell('–', 'color:#9CA3AF'),
-          l ? impCell(l.imp) : cell('–', 'color:#9CA3AF'), l && l.country ? cell(l.country, l.country === expo ? 'color:#B45309;font-weight:500' : '') : cell('–', 'color:#9CA3AF'),
+          l ? impCell(l.imp, l.pct) : cell('–', 'color:#9CA3AF'), l && l.country ? cell(l.country, l.country === expo ? 'color:#B45309;font-weight:500' : '') : cell('–', 'color:#9CA3AF'),
           l ? seenCell(l) : cell('–', 'color:#9CA3AF'), cell((l ? linkConf(l) : rivalConf(selId, x)).toFixed(2))] }));
       title = 'Relationships · ' + byId[selId].name; count = rows.length + ' rows';
     }
@@ -576,7 +579,8 @@ function finTable(h) {
 
 // ---- extraction progress block in the profile panel ----
 const STEP_LABEL = { queued: 'Queued', starting: 'Starting', downloading: 'Downloading the annual report',
-  tagging: 'Classifying its industries', reading: 'Reading the annual report', done: 'Done' };
+  tagging: 'Classifying its industries', reading: 'Reading the annual report',
+  importance: 'Finding major customers and single-source suppliers', done: 'Done' };
 
 function jobBlock(P) {
   const j = P.job;

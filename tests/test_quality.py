@@ -128,3 +128,79 @@ def test_competitor_list_with_cue_in_the_paragraph():
     assert review(r, "INTUITIVE SURGICAL INC", para)                 # cue in the paragraph
     assert review(r, "INTUITIVE SURGICAL INC")                       # itx clean: no paragraph, kept
     assert review(r, "INTUITIVE SURGICAL INC", ev) is None           # no cue anywhere: dropped
+
+
+# ---------- supply direction comes from the sentence (real NVIDIA / Symbotic output) ----------
+NV = "NVIDIA CORP"
+MEMORY = "We purchase memory from SK Hynix Inc., Micron Technology, Inc., and Samsung."
+
+
+@pytest.mark.parametrize("supplier", ["SK Hynix Inc.", "Micron Technology, Inc.", "Samsung Electronics Co., Ltd."])
+def test_purchase_from_flips_a_backwards_supply_link(supplier):
+    out = review(rel(NV, "supplies", supplier, MEMORY), NV)      # model said NVIDIA supplies them
+    assert (out.subject, out.relation, out.object) == (supplier, "supplies", NV)
+
+
+@pytest.mark.parametrize("relation,sentence,seller", [
+    ("customer_of", "Our wafers are manufactured by Taiwan Semiconductor Manufacturing Company Limited.", "other"),
+    ("supplies", "We rely on Taiwan Semiconductor Manufacturing Company Limited for wafer fabrication.", "other"),
+    ("customer_of", "Sales to Walmart Inc. represented 87% of our revenue.", "filer"),
+    ("customer_of", "Walmart Inc. accounted for 87% of our total revenue in fiscal 2025.", "filer"),
+    ("supplies", "Walmart also pays us for operation services for systems installed in its distribution centers.", "filer"),
+])
+def test_direction_patterns(relation, sentence, seller):
+    other = "Walmart Inc." if "Walmart" in sentence else "Taiwan Semiconductor Manufacturing Company Limited"
+    out = review(rel("Acme Corp", relation, other, sentence), "Acme Corp")
+    expected = (other, "Acme Corp") if seller == "other" else ("Acme Corp", other)
+    assert out.relation == "supplies" and (out.subject, out.object) == expected
+
+
+def test_no_direction_clue_keeps_the_model_direction():
+    s = "We entered into a supply agreement with Walmart Inc. in 2017."
+    out = review(rel("Acme Corp", "supplies", "Walmart Inc.", s), "Acme Corp")
+    assert (out.subject, out.object) == ("Acme Corp", "Walmart Inc.")
+
+
+FOUNDRY = ("We utilize foundries, such as Taiwan Semiconductor Manufacturing Company Limited, or TSMC, and "
+           "Samsung Electronics Co., Ltd., or Samsung, to produce our semiconductor wafers.")
+
+
+@pytest.mark.parametrize("foundry", ["Taiwan Semiconductor Manufacturing Company Limited", "Samsung Electronics Co., Ltd."])
+def test_foundries_such_as_are_suppliers(foundry):
+    out = review(rel(NV, "supplies", foundry, FOUNDRY), NV)          # model said NVIDIA supplies TSMC
+    assert (out.subject, out.relation, out.object) == (foundry, "supplies", NV)
+
+
+def test_use_x_to_manufacture_means_x_supplies():
+    s = "We use Jabil Inc. to manufacture and assemble our robot controllers."
+    out = review(rel("Acme Corp", "supplies", "Jabil Inc.", s), "Acme Corp")
+    assert (out.subject, out.object) == ("Jabil Inc.", "Acme Corp")
+
+
+def test_customers_using_our_products_are_not_flipped():
+    s = "Walmart Inc. uses our systems in 42 regional distribution centers and accounted for 87% of revenue."
+    out = review(rel("Acme Corp", "supplies", "Walmart Inc.", s), "Acme Corp")
+    assert (out.subject, out.object) == ("Acme Corp", "Walmart Inc.")
+
+
+def test_clean_twice_does_not_flip_back(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    import terminal.store as store_mod
+    from terminal.cli import main
+    from terminal.store import Store
+    monkeypatch.setattr(store_mod, "settings", SimpleNamespace(db_path=tmp_path / "t.db"))
+    st = Store()
+    st.upsert_entity({"id": "CIK:1", "name": NV, "ticker": "NVDA", "cik": 1, "listed": True})
+    st.upsert_entity({"id": "CIK:2", "name": "SK hynix Inc.", "ticker": "SKHY", "cik": 2, "listed": True})
+    st.db.execute("INSERT INTO filings (accession, entity_id, form) VALUES ('a1', 'CIK:1', '10-K')")
+    st.add_relationship("CIK:1", "supplies", "CIK:2", rel(NV, "supplies", "SK Hynix Inc.", MEMORY), "a1", "m")
+    st.close()
+
+    def edge():
+        s = Store(); e = s.db.execute("SELECT source_id, target_id FROM relationships").fetchone(); s.close()
+        return tuple(e)
+
+    main(["clean"]); assert edge() == ("CIK:2", "CIK:1")      # fixed: SK hynix supplies NVIDIA
+    main(["clean"]); assert edge() == ("CIK:2", "CIK:1")      # and stays fixed
+    assert "0 were relabelled" in capsys.readouterr().out.strip().splitlines()[-1]

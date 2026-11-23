@@ -70,6 +70,8 @@ WHERE entity_id = 'CIK:97210' AND metric = 'revenue' ORDER BY period_end;
 | accession, section | provenance (which filing, which item) |
 | model | which LLM produced it, for comparing models |
 | raw_source, raw_target | names before resolution, for debugging |
+| importance | `major` (customer singled out: ≥10% of revenue or "largest customer") or `single_source` (supplier called sole/single source); set by `importance.py` from the full report, NULL otherwise |
+| revenue_pct | the customer's share of the filer's revenue when the report states it (e.g. 85) |
 `UNIQUE(source_id, relation, target_id, accession, evidence)` stops duplicates on re-runs.
 
 ### mentions

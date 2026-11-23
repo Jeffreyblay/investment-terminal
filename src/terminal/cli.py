@@ -19,6 +19,7 @@ Maintenance:
   itx review               names the resolver could not match (add them to aliases.yaml)
   itx reset-extract <ind>  re-queue an industry's filings
   itx clean [--dry-run]    drop stored relationships that fail the quality filters (no LLM)
+  itx enrich [--ticker X]  mark major customers / single-source suppliers from cached reports (no LLM)
   itx neo4j robotics       (optional) mirror the graph into Neo4j Community
 """
 from __future__ import annotations
@@ -87,7 +88,8 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
         print(f"  ! {row['company']}: {e}")
         st.set_filing_status(row["accession"], "failed")
         return 0
-    sections = split_sections(html_to_text(html), row["form"])
+    text = html_to_text(html)
+    sections = split_sections(text, row["form"])
     if tag:
         report("tagging", 0, 0, 0)
         business = sections.get("business") or sections.get("f20_info") or next(iter(sections.values()))
@@ -130,6 +132,10 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
         st.db.commit()   # each passage's results become visible right away
     # Finished: drop old relationships this run didn't find again.
     st.db.executemany("DELETE FROM relationships WHERE id=?", [(i,) for i in old_ids - kept])
+    # Major customers / single-source suppliers, read from the whole report (no LLM).
+    report("importance", len(passages), len(passages), n_rel)
+    from .importance import enrich_filing
+    enrich_filing(st, row["accession"], row["entity_id"], text)
     st.set_filing_status(row["accession"], "extracted")
     st.mark_expanded(row["entity_id"])
     st.db.commit()
@@ -298,38 +304,70 @@ def cmd_clean(args) -> None:
     """Apply the current quality filters to relationships already in the database (no LLM)."""
     import sqlite3
 
-    from .extract import Relationship, review
+    from .extract import Relationship, is_filer, review
     from .store import Store
     st = Store()
     rows = st.db.execute(
-        """SELECT r.*, e.name AS filer FROM relationships r JOIN filings f ON f.accession = r.accession
-           JOIN entities e ON e.id = f.entity_id""").fetchall()
+        """SELECT r.*, e.name AS filer, f.entity_id AS filer_id FROM relationships r
+           JOIN filings f ON f.accession = r.accession JOIN entities e ON e.id = f.entity_id""").fetchall()
     dropped = relabelled = 0
     for r in rows:
-        rel = Relationship(r["raw_source"] or "", r["relation"], r["raw_target"] or "", r["evidence"] or "",
-                           r["confidence"] or 0)
+        # The ids are the truth about direction (raw names keep whatever order the model used).
+        filer_is_source = r["source_id"] == r["filer_id"]
+        raws = [r["raw_source"] or "", r["raw_target"] or ""]
+        other = raws[1] if is_filer(raws[0], r["filer"]) else raws[0]
+        subj, obj = (r["filer"], other) if filer_is_source else (other, r["filer"])
+        rel = Relationship(subj, r["relation"], obj, r["evidence"] or "", r["confidence"] or 0)
         new = None if r["source_id"] == r["target_id"] else review(rel, r["filer"])
         if new is None:
             dropped += 1
-            print(f"  drop:    {r['raw_source']} --{r['relation']}--> {r['raw_target']}")
+            print(f"  drop:    {subj} --{r['relation']}--> {obj}")
             if not args.dry_run:
                 st.db.execute("DELETE FROM relationships WHERE id=?", (r["id"],))
             continue
-        if new.relation != rel.relation or new.subject != rel.subject:
+        # review() may change the relation and/or flip the direction ("we purchase from X").
+        flip = is_filer(new.subject, r["filer"]) != filer_is_source
+        if new.relation != rel.relation or flip:
             relabelled += 1
-            # review() may flip the direction ("acquired by"): swap ids to match.
-            flip = new.object == rel.subject
             src, tgt = (r["target_id"], r["source_id"]) if flip else (r["source_id"], r["target_id"])
-            print(f"  relabel: {r['raw_source']} --{r['relation']}--> {r['raw_target']}  =>  {new.relation}")
+            print(f"  relabel: {subj} --{r['relation']}--> {obj}  =>  {new.subject} --{new.relation}--> {new.object}")
             if not args.dry_run:
-                try:
-                    st.db.execute("UPDATE relationships SET relation=?, source_id=?, target_id=? WHERE id=?",
-                                  (new.relation, src, tgt, r["id"]))
+                try:   # raw names follow the ids, so a later clean reads the corrected direction
+                    st.db.execute("""UPDATE relationships SET relation=?, source_id=?, target_id=?,
+                                     raw_source=?, raw_target=? WHERE id=?""",
+                                  (new.relation, src, tgt, new.subject, new.object, r["id"]))
                 except sqlite3.IntegrityError:   # the corrected row already exists
                     st.db.execute("DELETE FROM relationships WHERE id=?", (r["id"],))
     st.close()
     verb = "would be" if args.dry_run else "were"
     print(f"{len(rows)} relationships: {dropped} {verb} removed, {relabelled} {verb} relabelled.")
+
+
+def cmd_enrich(args) -> None:
+    """Recompute importance (major customer / single source) for companies already read.
+    Uses the cached annual reports: no LLM and, after the first download, no network."""
+    from .importance import enrich_filing
+    from .sections import html_to_text
+    from .store import Store
+    ed, st = _edgar(), Store()
+    q = """SELECT f.accession, f.url, f.entity_id, e.ticker, e.name FROM filings f
+           JOIN entities e ON e.id = f.entity_id WHERE f.status = 'extracted'"""
+    params: tuple = ()
+    if args.ticker:
+        q += " AND e.ticker = ?"
+        params = (args.ticker.upper(),)
+    for f in st.db.execute(q, params).fetchall():
+        n = enrich_filing(st, f["accession"], f["entity_id"], html_to_text(ed.get(f["url"])))
+        st.db.commit()
+        rows = st.db.execute(
+            """SELECT r.importance, r.revenue_pct, s.name AS s, t.name AS t FROM relationships r
+               JOIN entities s ON s.id = r.source_id JOIN entities t ON t.id = r.target_id
+               WHERE r.accession = ? AND r.importance IS NOT NULL""", (f["accession"],)).fetchall()
+        print(f"  {f['ticker'] or f['name']:6} {n} important link(s)")
+        for r in rows:
+            pct = f" ({r['revenue_pct']:g}% of revenue)" if r["revenue_pct"] else ""
+            print(f"         {r['s']} -> {r['t']}: {r['importance']}{pct}")
+    st.close()
 
 
 def cmd_reset(args) -> None:
@@ -427,6 +465,8 @@ def main(argv: list[str] | None = None) -> None:
     sp = add("review", cmd_review, None)
     sp.add_argument("--limit", type=int, default=50)
     add("reset-extract", cmd_reset)
+    sp = add("enrich", cmd_enrich, None)
+    sp.add_argument("--ticker", help="only this company")
     sp = add("clean", cmd_clean, None)
     sp.add_argument("--dry-run", action="store_true", help="list what would be removed")
     for name, fn in (("export", cmd_export), ("neo4j", cmd_neo4j)):

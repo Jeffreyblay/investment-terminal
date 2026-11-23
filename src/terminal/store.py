@@ -76,6 +76,8 @@ MIGRATIONS = [
     ("entities", "sic", "TEXT"),
     ("entities", "sic_desc", "TEXT"),
     ("entities", "expanded_at", "TEXT"),   # when this company's own filing was processed
+    ("relationships", "importance", "TEXT"),   # major | single_source (importance.py), else NULL
+    ("relationships", "revenue_pct", "REAL"),  # share of the filer's revenue, for major customers
 ]
 
 

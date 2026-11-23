@@ -10,6 +10,7 @@ import networkx as nx
 
 # Normalise direction so edges read supplier -> customer.
 FLIP = {"customer_of": "supplies"}
+IMPORTANCE_RANK = {"major": 1, "single_source": 2}
 
 
 def build_graph(nodes: list[dict], rels: list[dict]) -> nx.MultiDiGraph:
@@ -22,7 +23,7 @@ def build_graph(nodes: list[dict], rels: list[dict]) -> nx.MultiDiGraph:
             src, tgt, rel = tgt, src, FLIP[rel]
         g.add_edge(src, tgt, relation=rel, **{k: r.get(k) for k in
                    ("component", "evidence", "confidence", "accession", "filing_url", "form",
-                    "filed", "section")})
+                    "filed", "section", "importance", "revenue_pct")})
     return g
 
 
@@ -64,10 +65,16 @@ def graph_payload(g: nx.MultiDiGraph, industry: dict, extra: dict | None = None)
         key = (e["source"], e["target"], e["relation"])
         m = merged.setdefault(key, {"source": e["source"], "target": e["target"],
                                     "relation": e["relation"], "components": set(),
-                                    "confidence": 0.0, "citations": []})
+                                    "confidence": 0.0, "citations": [],
+                                    "importance": None, "revenue_pct": None})
         if e.get("component"):
             m["components"].add(e["component"])
         m["confidence"] = max(m["confidence"], e.get("confidence") or 0)
+        # Strongest importance across citations (single_source > major), highest revenue share.
+        if IMPORTANCE_RANK.get(e.get("importance"), 0) > IMPORTANCE_RANK.get(m["importance"], 0):
+            m["importance"] = e.get("importance")
+        if e.get("revenue_pct") is not None:
+            m["revenue_pct"] = max(m["revenue_pct"] or 0, e["revenue_pct"])
         m["citations"].append({k: e.get(k) for k in ("evidence", "form", "filed", "filing_url",
                                                      "section", "confidence")})
     for m in merged.values():

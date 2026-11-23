@@ -189,11 +189,14 @@ def keep_relationship(subject: str, obj: str, company: str | None, passage_text:
 # The evidence sentence must contain a cue for the relation it supports. Drops cases like
 # "Photon can be configured as an upper stage" (a product description) or "we launched from
 # NASA Wallops" (a place), which the model labelled `supplies`.
+# supplies and customer_of are the same link seen from either end, so they share one cue list
+# (review() may turn one into the other when it fixes the direction).
+_SUPPLY_CUES = (r"suppl|customer|client|sell|sold|sale|purchas|buy|bought|order|contract|deliver|provid|revenue"
+                r"|vendor|sourc|distribut|ship|launch\w* for|award|use[sd]?|depend|rel(?:y|ies|ied|iance) (?:on|upon)"
+                r"|manufactur|fabricat|foundr|assembl|pays|paid")
 RELATION_CUES = {rel: re.compile(r"\b(?:" + pat + ")", re.I) for rel, pat in {
-    "supplies": r"suppl|customer|client|sell|sold|sale|purchas|buy|bought|order|contract|deliver|provid|revenue"
-                r"|vendor|sourc|distribut|ship|launch\w* for|award|use[sd]? (?:our|its)",
-    "customer_of": r"suppl|customer|client|sell|sold|sale|purchas|buy|bought|order|contract|deliver|provid|revenue"
-                   r"|vendor|sourc|distribut|depend|rel(?:y|ies|iance) on|use[sd]?",
+    "supplies": _SUPPLY_CUES,
+    "customer_of": _SUPPLY_CUES,
     "manufactures_for": r"manufactur|foundr|fabricat|assembl|produc|suppl|contract",
     "competes_with": r"compet|rival|alternative|market share",
     "partners_with": r"partner|collaborat|joint venture|alliance|agreement|licens|work(?:s|ed|ing)? (?:closely )?with"
@@ -221,11 +224,65 @@ def _acquisition_side(name: str, evidence: str) -> str | None:
     return None
 
 
+def _key_word(name: str) -> str | None:
+    """First distinctive word of a name, for finding it in a sentence ("SK Hynix Inc." -> "hynix")."""
+    from .resolve import normalize
+    words = [w for w in normalize(name).split() if len(w) >= 3] or normalize(name).split()
+    return words[0] if words else None
+
+
+# Who buys from whom, read from the sentence. Each pattern ends where the counterparty's name may follow.
+_FILER_BUYS = re.compile(            # "we purchase memory from X", "supplied by X", "we rely on X for"
+    r"\b(?:(?:purchas\w*|buy\w*|bought|sourc\w*|procur\w*|obtain\w*|licens\w*|order\w*)\b[^.;]{0,150}?\bfrom"
+    r"|(?:supplied|manufactured|fabricated|produced|provided|assembled|made)\s+(?:for\s+us\s+)?by"
+    r"|(?:rel(?:y|ies|ied)|depend\w*)\s+(?:on|upon))\b", re.I)
+_SUPPLIER_LIST = re.compile(         # "foundries, such as X", "suppliers including X"
+    r"\b(?:foundr\w*|suppliers?|vendors?|subcontractors?|(?:contract\s+)?manufacturers?)\b,?\s+"
+    r"(?:such\s+as|including|like)\b", re.I)
+_FILER_USES = re.compile(r"\b(?:us(?:e|es|ed|ing)|utiliz\w*|engag\w*|employ\w*)\b", re.I)
+_TO_MAKE = re.compile(                # "... to produce our wafers", "... to manufacture our products"
+    r"\bto\s+(?:produce|manufacture|make|fabricate|build|assemble|test|package)\b", re.I)
+_FILER_SELLS = re.compile(           # "sold to X", "sales to X", "shipments to X"
+    r"\b(?:sold|sell\w*|sales|ship\w*|deliver\w*|licensed)\b[^.;]{0,60}?\bto\b", re.I)
+_OTHER_BUYS_AFTER = re.compile(      # "X accounted for 14% of revenue", "X purchases our", "X pays us"
+    r"^[^;]{0,80}?\b(?:accounted for|represented|purchas\w*|bought|buys|ordered|orders|pays|paid)\b", re.I)
+    # (dots allowed: names like "Walmart Inc." contain them; the evidence is a single sentence anyway)
+
+
+def _seller(other: str, evidence: str) -> str | None:
+    """'other' if the sentence says the counterparty sells to the filer, 'filer' if the filer sells
+    to the counterparty, None if the sentence doesn't say."""
+    word = _key_word(other)
+    if not word:
+        return None
+    name = re.compile(r"\b" + re.escape(word) + r"\b", re.I)
+    for m in _FILER_BUYS.finditer(evidence):
+        if name.search(evidence[m.end(): m.end() + 200]):
+            return "other"
+    for m in _SUPPLIER_LIST.finditer(evidence):
+        if name.search(evidence[m.end(): m.end() + 200]):
+            return "other"
+    for m in _FILER_USES.finditer(evidence):     # "we utilize X ... to produce our wafers"
+        after = evidence[m.end(): m.end() + 250]
+        hit = name.search(after)
+        if hit and _TO_MAKE.search(after[hit.end():]):
+            return "other"
+    for m in _FILER_SELLS.finditer(evidence):
+        if name.search(evidence[m.end(): m.end() + 120]):
+            return "filer"
+    for m in name.finditer(evidence):
+        if _OTHER_BUYS_AFTER.search(evidence[m.end():]):
+            return "filer"
+    return None
+
+
 def review(rel: Relationship, company: str | None, passage_text: str | None = None) -> Relationship | None:
     """Every quality rule in one place; returns the relationship (possibly relabelled) or None to drop it.
     1. keep_relationship: filer on one side, a named organisation on the other, found in the passage
     2. acquisitions: "our acquisition of X" becomes <filer> acquired X, whatever the model called it
-    3. the evidence sentence must contain a cue for the relation (RELATION_CUES)"""
+    3. supply direction: for supplies / customer_of, the sentence decides who sells to whom
+       ("we purchase memory from X" -> X supplies <filer>), stored as <seller> supplies <buyer>
+    4. the evidence sentence must contain a cue for the relation (RELATION_CUES)"""
     from dataclasses import replace
     if not keep_relationship(rel.subject, rel.object, company, passage_text):
         return None
@@ -237,6 +294,12 @@ def review(rel: Relationship, company: str | None, passage_text: str | None = No
             rel = replace(rel, relation="acquired", subject=company, object=other)
         elif side == "other":
             rel = replace(rel, relation="acquired", subject=other, object=company)
+        elif rel.relation in ("supplies", "customer_of"):
+            seller = _seller(other, ev)
+            if seller == "other":
+                rel = replace(rel, relation="supplies", subject=other, object=company)
+            elif seller == "filer":
+                rel = replace(rel, relation="supplies", subject=company, object=other)
     cue = RELATION_CUES.get(rel.relation)
     if cue is None:
         return None
