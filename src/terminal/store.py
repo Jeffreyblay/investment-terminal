@@ -59,6 +59,16 @@ CREATE TABLE IF NOT EXISTS company_tags (      -- open-ended industries, built u
   PRIMARY KEY (entity_id, tag)
 );
 CREATE INDEX IF NOT EXISTS tag_idx ON company_tags(tag);
+CREATE TABLE IF NOT EXISTS financials_annual ( -- XBRL history, one row per company / metric / year
+  entity_id  TEXT NOT NULL REFERENCES entities(id),
+  metric     TEXT NOT NULL,                    -- revenue, net_income, total_assets, ... (XBRL_METRICS)
+  period_end TEXT NOT NULL,                    -- fiscal year end, YYYY-MM-DD
+  value      REAL NOT NULL,
+  concept    TEXT,                             -- us-gaap concept it came from
+  filed      TEXT,                             -- filing date of the value used (latest = restated)
+  accession  TEXT,
+  PRIMARY KEY (entity_id, metric, period_end)
+);
 """
 
 # Columns added after v0.1; applied to existing databases on open.
@@ -73,7 +83,9 @@ class Store:
     def __init__(self, path: Path | None = None):
         self.path = path or settings.db_path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path)
+        # check_same_thread=False: the API opens one Store per request, and FastAPI may
+        # close it on a different worker thread than the one that opened it.
+        self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA_SQL)
         for table, col, typ in MIGRATIONS:
@@ -108,6 +120,31 @@ class Store:
             (entity_id, min_conf, entity_id, min_conf)).fetchall()
         return [r["n"] for r in rows]
 
+    def set_financials_history(self, entity_id: str, series: dict[str, list[dict]]) -> None:
+        """Replace a company's stored history with `series` (from edgar.annual_series).
+        Replacing, not merging, means restated values overwrite the old ones."""
+        self.db.execute("DELETE FROM financials_annual WHERE entity_id=?", (entity_id,))
+        self.db.executemany(
+            """INSERT INTO financials_annual
+               (entity_id, metric, period_end, value, concept, filed, accession)
+               VALUES (?,?,?,?,?,?,?)""",
+            [(entity_id, metric, r["period_end"], r["value"], r.get("concept"), r.get("filed"),
+              r.get("accession")) for metric, rows in series.items() for r in rows])
+
+    def financials_history(self, ids) -> dict[str, dict[str, list[dict]]]:
+        """{entity_id: {metric: [{"period_end", "value"}, ...newest first]}} for the given ids."""
+        ids = list(ids)
+        out: dict[str, dict[str, list[dict]]] = {}
+        if not ids:
+            return out
+        for r in self.db.execute(
+                f"""SELECT entity_id, metric, period_end, value FROM financials_annual
+                    WHERE entity_id IN ({','.join('?' * len(ids))})
+                    ORDER BY entity_id, metric, period_end DESC""", ids):
+            out.setdefault(r["entity_id"], {}).setdefault(r["metric"], []).append(
+                {"period_end": r["period_end"], "value": r["value"]})
+        return out
+
     def tags_for(self, ids) -> dict[str, list[dict]]:
         ids = list(ids)
         out: dict[str, list[dict]] = {i: [] for i in ids}
@@ -135,6 +172,7 @@ class Store:
             return []
         members = members or {}
         tags = self.tags_for(ids)
+        history = self.financials_history(ids)
         nodes = []
         for row in self.db.execute(f"SELECT * FROM entities WHERE id IN ({','.join('?' * len(ids))})",
                                    tuple(ids)):
@@ -145,6 +183,7 @@ class Store:
             d["in_industry"] = d["id"] in members
             d["financials"] = json.loads(d["financials"]) if d["financials"] else None
             d["tags"] = tags.get(d["id"], [])
+            d["history"] = history.get(d["id"])
             d["expanded"] = bool(d.get("expanded_at"))
             nodes.append(d)
         return nodes

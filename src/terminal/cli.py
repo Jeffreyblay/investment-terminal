@@ -12,6 +12,9 @@ Industry presets (optional shortcut):
   itx export robotics      build graph + analytics, write web/data/robotics.json
   itx run robotics         seed + extract + export
 
+Web:
+  itx serve                local API + viewer at http://127.0.0.1:8000 (search companies live)
+
 Maintenance:
   itx review               names the resolver could not match (add them to aliases.yaml)
   itx reset-extract <ind>  re-queue an industry's filings
@@ -46,15 +49,17 @@ def _slug(s: str) -> str:
 
 def add_company(ed, st, info: dict, years: int, segment=None, industry=None, seed=False) -> str:
     """Store an SEC filer with its SIC profile, XBRL financials and annual filings."""
-    from .edgar import EdgarError, headline_financials
+    from .edgar import EdgarError, annual_series, headline_from_series
     ent = {"id": f"CIK:{info['cik']}", "name": info["name"], "ticker": info["ticker"],
            "cik": info["cik"], "listed": True}
-    fin = None
+    series = {}
     try:
-        fin = headline_financials(ed.company_facts(info["cik"]))
+        series = annual_series(ed.company_facts(info["cik"]))
     except EdgarError:
         pass  # foreign filers often have no us-gaap facts
-    st.upsert_entity(ent, fin)
+    st.upsert_entity(ent, headline_from_series(series) or None)
+    if series:
+        st.set_financials_history(ent["id"], series)
     prof = ed.profile(info["cik"])
     st.set_profile(ent["id"], prof["sic"], prof["sic_desc"])
     if industry:
@@ -294,6 +299,15 @@ def cmd_neo4j(args) -> None:
     print("Loaded into Neo4j.")
 
 
+def cmd_serve(args) -> None:
+    try:
+        import uvicorn
+    except ImportError:
+        sys.exit('The API needs extra packages: pip install -e ".[api]"')
+    print(f"Investment Terminal on http://{args.host}:{args.port}  (API docs: /docs, Ctrl+C to stop)")
+    uvicorn.run("terminal.api:app", host=args.host, port=args.port, reload=args.reload)
+
+
 def cmd_run(args) -> None:
     cmd_seed(args)
     cmd_extract(args)
@@ -322,6 +336,10 @@ def main(argv: list[str] | None = None) -> None:
     sp.add_argument("--min-conf", type=float, default=0.5)
     sp.add_argument("--min-tag-conf", type=float, default=0.5)
     add("tags", cmd_tags, None)
+    sp = add("serve", cmd_serve, None)
+    sp.add_argument("--host", default="127.0.0.1", help="127.0.0.1 = only this computer")
+    sp.add_argument("--port", type=int, default=8000)
+    sp.add_argument("--reload", action="store_true", help="restart when code changes (dev)")
 
     for name, fn in (("seed", cmd_seed), ("run", cmd_run)):
         sp = add(name, fn)

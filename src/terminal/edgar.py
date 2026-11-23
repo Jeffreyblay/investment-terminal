@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,7 @@ class Edgar:
         self.cache_dir = cache_dir or settings.cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._last = 0.0
+        self._lock = threading.Lock()
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": self.user_agent,
                                      "Accept-Encoding": "gzip, deflate"})
@@ -72,20 +74,23 @@ class Edgar:
             age = (time.time() - path.stat().st_mtime) / 86400
             if max_age_days is None or age < max_age_days:
                 return path.read_text(encoding="utf-8", errors="ignore")
-        wait = self.min_interval - (time.time() - self._last)
-        if wait > 0:
-            time.sleep(wait)
-        for attempt in range(4):
-            self._last = time.time()
-            r = self.session.get(url, timeout=30)
-            if r.status_code == 200:
-                path.write_text(r.text, encoding="utf-8")
-                return r.text
-            if r.status_code in (429, 503):
-                time.sleep(2 ** attempt)
-                continue
-            raise EdgarError(f"{r.status_code} for {url}")
-        raise EdgarError(f"Gave up after retries: {url}")
+        # One request at a time across threads (the API serves searches in parallel),
+        # so the SEC rate limit holds no matter how many searches are running.
+        with self._lock:
+            wait = self.min_interval - (time.time() - self._last)
+            if wait > 0:
+                time.sleep(wait)
+            for attempt in range(4):
+                self._last = time.time()
+                r = self.session.get(url, timeout=30)
+                if r.status_code == 200:
+                    path.write_text(r.text, encoding="utf-8")
+                    return r.text
+                if r.status_code in (429, 503):
+                    time.sleep(2 ** attempt)
+                    continue
+                raise EdgarError(f"{r.status_code} for {url}")
+            raise EdgarError(f"Gave up after retries: {url}")
 
     def get_json(self, url: str, **kw) -> dict:
         return json.loads(self.get(url, **kw))
@@ -111,6 +116,15 @@ class Edgar:
     def submissions(self, cik: int) -> dict:
         return self.get_json(f"https://data.sec.gov/submissions/CIK{cik:010d}.json", max_age_days=1)
 
+    def _names(self) -> dict[str, dict]:
+        """Normalised company name -> {cik, ticker, name}, built once."""
+        if getattr(self, "_by_norm", None) is None:
+            from .resolve import normalize
+            self._by_norm = {}
+            for c in self.tickers().values():
+                self._by_norm.setdefault(normalize(c["name"]), c)
+        return self._by_norm
+
     def find(self, query: str) -> dict:
         """Ticker or company name -> {cik, ticker, name}. Exact ticker first, then fuzzy name."""
         q = query.strip()
@@ -119,11 +133,34 @@ class Edgar:
             return t
         from rapidfuzz import fuzz, process
         from .resolve import normalize
-        by_norm = {normalize(c["name"]): c for c in self.tickers().values()}
-        hit = process.extractOne(normalize(q), list(by_norm), scorer=fuzz.WRatio)
+        names = self._names()
+        hit = process.extractOne(normalize(q), list(names), scorer=fuzz.WRatio)
         if not hit or hit[1] < 85:
             raise EdgarError(f"No SEC filer matches '{query}'")
-        return by_norm[hit[0]]
+        return names[hit[0]]
+
+    def search(self, query: str, limit: int = 8) -> list[dict]:
+        """Several matches for a search box: exact ticker, ticker prefix, then fuzzy name."""
+        from rapidfuzz import fuzz, process
+        from .resolve import normalize
+        q = query.strip()
+        if not q:
+            return []
+        out: dict[int, dict] = {}            # by CIK, keeps insertion order
+        tickers = self.tickers()
+        if q.upper() in tickers:
+            out[tickers[q.upper()]["cik"]] = tickers[q.upper()]
+        for t, c in tickers.items():          # SEC file is roughly largest-first
+            if len(out) >= limit:
+                break
+            if t.startswith(q.upper()):
+                out.setdefault(c["cik"], c)
+        names = self._names()
+        for name, score, _ in process.extract(normalize(q), list(names), scorer=fuzz.WRatio,
+                                              limit=limit):
+            if score >= 70:
+                out.setdefault(names[name]["cik"], names[name])
+        return list(out.values())[:limit]
 
     def profile(self, cik: int) -> dict:
         """Company profile from the submissions file: SIC code, description, exchanges."""
@@ -211,7 +248,7 @@ XBRL_METRICS: dict[str, dict] = {
     "operating_cash_flow": {"kind": "duration", "unit": "USD", "concepts": [
         "NetCashProvidedByUsedInOperatingActivities"]},
     "capex": {"kind": "duration", "unit": "USD", "concepts": [
-        "PaymentsToAcquirePropertyPlantAndEquipment"]},
+        "PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"]},
 }
 
 ANNUAL_FORMS = ("10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A")
@@ -254,11 +291,25 @@ def annual_series(facts: dict, years: int = 5) -> dict[str, list[dict]]:
             for r in rows:
                 r.pop("_rank")
             out[metric] = rows
-    return out
+    return _drop_discontinued(out)
 
 
-def headline_financials(facts: dict) -> dict:
+def _drop_discontinued(out: dict[str, list[dict]], max_gap_days: int = 400) -> dict[str, list[dict]]:
+    """Drop metrics whose newest value is much older than the company's latest fiscal year.
+    That happens when a company stopped using every tag we know for a metric (e.g. NVIDIA's capex
+    tag ended in 2012). Showing that old number next to this year's figures would be misleading."""
+    if not out:
+        return out
+    newest = max(rows[0]["period_end"] for rows in out.values())
+    return {m: rows for m, rows in out.items() if _days(rows[0]["period_end"], newest) <= max_gap_days}
+
+
+def headline_from_series(series: dict[str, list[dict]]) -> dict:
     """Latest fiscal-year value per metric: {"revenue": {"value", "period_end", "concept"}, ...}.
     This is what the viewer's company panel shows."""
     return {m: {"value": s[0]["value"], "period_end": s[0]["period_end"], "concept": s[0]["concept"]}
-            for m, s in annual_series(facts, years=1).items()}
+            for m, s in series.items() if s}
+
+
+def headline_financials(facts: dict) -> dict:
+    return headline_from_series(annual_series(facts, years=1))

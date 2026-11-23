@@ -40,11 +40,11 @@ itx export robotics             # writes web/data/robotics.json
 
 itx review                      # names the resolver couldn't match -> add to config/aliases.yaml
 
-# 5. View it
-cd web && python -m http.server 8000     # open http://localhost:8000
+# 5. Open the terminal (needs: pip install -e ".[api]")
+itx serve                        # open http://127.0.0.1:8000 and search any US-listed company
 ```
 
-You can open the viewer before running anything: it ships with `web/data/sample-robotics.json`, which is **illustrative sample data**, not extracted from filings.
+The terminal is the Explorer (`web/prototype/explorer.html`). Served by `itx serve`, it searches SEC EDGAR live: nothing needs to be preloaded, and each company is cached after its first search. Opened directly as a file, it shows built-in **illustrative sample data**, not extracted from filings.
 
 Run the tests (offline, no Ollama needed): `pytest`
 
@@ -61,7 +61,7 @@ Run the tests (offline, no Ollama needed): `pytest`
  │ search       │   │ cue filter   │   │ evidence     │   │ aliases.yaml │   │  Neo4j CE)   │
  └──────────────┘   └──────────────┘   └──────────────┘   └──────────────┘   └──────┬───────┘
                                                                                      ▼
-                                       web/index.html (Cytoscape.js)  ◀── graph.py (NetworkX
+                                       Explorer via `itx serve` (api.py) ◀── graph.py (NetworkX
                                        graph, company panel, citations      analytics + JSON export)
 ```
 
@@ -125,8 +125,7 @@ investment-terminal/
 │   ├── graph.py              NetworkX analytics, JSON export, Neo4j loader
 │   └── cli.py                `itx` command
 ├── web/
-│   ├── index.html            the terminal viewer for real pipeline output (Cytoscape.js)
-│   ├── prototype/explorer.html  standalone Explorer prototype (sample data), double-click to open
+│   ├── prototype/explorer.html  the terminal UI: live search via `itx serve`, sample data if opened as a file
 │   └── data/                 exported graphs (+ sample-robotics.json)
 ├── design/                   prototype notes + canvas source files (see design/README.md)
 ├── scripts/make_sample.py    regenerates the sample dataset

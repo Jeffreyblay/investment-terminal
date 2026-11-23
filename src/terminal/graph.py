@@ -46,6 +46,15 @@ def export_json(g: nx.MultiDiGraph, industry: dict, path: Path, extra: dict | No
     """Write the web viewer's data file (nodes, edges with citations, analytics).
     `industry` needs a "name" (and optional "segments"); `extra` adds keys such as
     {"mode": "company", "center": "CIK:1045810"}."""
+    data = graph_payload(g, industry, extra)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=1, default=str))
+    update_index(path.parent, path.stem, data)
+    return data
+
+
+def graph_payload(g: nx.MultiDiGraph, industry: dict, extra: dict | None = None) -> dict:
+    """The viewer's data format as a dict (used by export_json and by the API)."""
     edges = []
     for u, v, d in g.edges(data=True):
         edges.append({"source": u, "target": v, **d})
@@ -68,7 +77,7 @@ def export_json(g: nx.MultiDiGraph, industry: dict, path: Path, extra: dict | No
     for nid, d in g.nodes(data=True):
         nodes.append({k: d.get(k) for k in ("id", "name", "ticker", "cik", "listed", "segment",
                                             "is_seed", "in_industry", "financials", "sic",
-                                            "sic_desc", "tags", "expanded")})
+                                            "sic_desc", "tags", "expanded", "history")})
     data = {
         "mode": "industry",
         "industry": industry["name"],
@@ -78,9 +87,6 @@ def export_json(g: nx.MultiDiGraph, industry: dict, path: Path, extra: dict | No
         "analytics": analytics(g),
         **(extra or {}),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=1, default=str))
-    update_index(path.parent, path.stem, data)
     return data
 
 

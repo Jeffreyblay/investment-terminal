@@ -67,8 +67,8 @@ Tables: `entities`, `industry_members`, `filings` (with status), `mentions` (raw
 - Export merges duplicate edges from different filings into one edge with a `citations` list.
 - `load_neo4j` optionally `MERGE`s nodes and edges into Neo4j Community. Relationship types come from the fixed enum, so the Cypher can't be injected.
 
-### `web/index.html`: viewer
-A single static file using Cytoscape.js from a CDN. It needs no build step and no server code; `python -m http.server` is enough. It has an industry picker, search, a force-directed layout, a company panel (in/out links, XBRL financials, citations with filing links) and an analytics panel.
+### `api.py` + `web/prototype/explorer.html`: the terminal
+`itx serve` runs a local FastAPI app that serves the Explorer at `/` and three endpoints: `/api/health`, `/api/search?q=` (autocomplete) and `/api/company/{ticker or name}`. A company search calls the same `add_company` as the CLI: the first search fetches from EDGAR (profile, filings list, 5-year XBRL history) and saves it to SQLite, later searches come from the disk cache. Nothing is preloaded. The response is the export JSON format plus `company` and `filings`, which the Explorer converts (`fromApi`) into its network, relationships table and profile panel (financials with 5-year trends, annual report links). Opened as a plain file, the Explorer falls back to built-in sample data.
 
 ## Data flow and state
 ```

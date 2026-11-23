@@ -37,6 +37,23 @@ Added in v0.2 (migrated automatically on open): `sic` (TEXT), `sic_desc` (TEXT),
 
 Tags are open-ended industries: `itx tag robotics` = every company with that tag + direct partners.
 
+### financials_annual (v0.3)
+One row per company, metric and fiscal year, from XBRL `companyfacts` (`edgar.annual_series`, last 5 years).
+| column | notes |
+|---|---|
+| entity_id, metric, period_end | PK; `metric` is a key of `XBRL_METRICS` (revenue, gross_profit, operating_income, net_income, rnd, eps_diluted, cash, total_assets, total_liabilities, equity, long_term_debt, operating_cash_flow, capex) |
+| value | USD (EPS in USD per share) |
+| concept | the us-gaap concept the value came from |
+| filed, accession | the filing the value came from; the latest filing wins, so restatements apply |
+
+A company's rows are replaced as a whole each time it's processed. `entities.financials` still holds the latest year for the viewer panel; exported nodes also carry `history: {metric: [{period_end, value}, ...]}`, newest first.
+
+```sql
+-- Revenue history for one company
+SELECT period_end, value FROM financials_annual
+WHERE entity_id = 'CIK:97210' AND metric = 'revenue' ORDER BY period_end;
+```
+
 ### industry_members
 `(industry, entity_id)` PK, `segment`, `is_seed`. Companies that are only linked to (not members) still appear in exports with `in_industry: false`.
 

@@ -21,7 +21,8 @@ dependencies = [
 [project.optional-dependencies]
 neo4j = ["neo4j>=5.14"]
 prices = ["yfinance>=0.2.40"]
-dev = ["pytest>=8.0"]
+api = ["fastapi>=0.110", "uvicorn>=0.29"]
+dev = ["pytest>=8.0", "httpx>=0.27"]   # httpx: FastAPI's TestClient
 
 [project.scripts]
 itx = "terminal.cli:main"
