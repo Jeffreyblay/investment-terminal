@@ -1,0 +1,33 @@
+# Industry definition: seed companies + keywords used for discovery and filtering.
+name: Robotics
+segments:
+  - Components & chips
+  - Robot makers
+  - Customers
+
+# Seeds must be SEC filers (US-listed, incl. ADRs / 20-F filers). Use tickers.
+seeds:
+  - { ticker: TER,  segment: Robot makers }        # Teradyne (Universal Robots)
+  - { ticker: ISRG, segment: Robot makers }        # Intuitive Surgical
+  - { ticker: SYM,  segment: Robot makers }        # Symbotic
+  - { ticker: ZBRA, segment: Robot makers }        # Zebra (Fetch robotics)
+  - { ticker: NVDA, segment: Components & chips }
+  - { ticker: AMBA, segment: Components & chips }
+  - { ticker: OUST, segment: Components & chips }
+  - { ticker: ROK,  segment: Components & chips }  # Rockwell Automation
+  - { ticker: CGNX, segment: Components & chips }  # Cognex machine vision
+
+# Phrases for EDGAR full-text discovery and for picking relevant paragraphs.
+keywords:
+  - industrial robot
+  - collaborative robot
+  - humanoid
+  - autonomous mobile robot
+  - robotic arm
+  - servo motor
+  - actuator
+  - harmonic reducer
+  - machine vision
+  - lidar
+  - end effector
+  - warehouse automation

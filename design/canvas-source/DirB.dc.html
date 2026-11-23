@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Direction B: pro terminal</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#FF9F1C}a:hover{color:#FFB84D}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; background: #050505; color: #D9D9D9; font-family: 'IBM Plex Mono', monospace; font-size: 13px; display: flex; flex-direction: column">
+<div style="height: 44px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 16px; background: #FF9F1C; color: #120A00">
+<span style="font-weight: 600">ITX</span>
+<label for="cmd" style="position: absolute; left: -9999px">Command</label>
+<input id="cmd" value="NVDA US &lt;COMPANY&gt; DEPTH 1" style="flex: 1; height: 30px; box-sizing: border-box; padding: 0 10px; border: none; border-radius: 2px; background: #120A00; color: #FF9F1C; font: 500 13px 'IBM Plex Mono', monospace">
+<span style="font-weight: 500">GO ⏎</span>
+</div>
+
+<div style="flex: 1; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1.3fr) minmax(0, 1fr); gap: 1px; background: #262626; min-height: 0">
+<section style="background: #050505; padding: 12px 14px; position: relative; overflow: hidden">
+<div style="display: flex; justify-content: space-between; color: #FF9F1C; font-weight: 500"><span>1) NETWORK · NVDA · 1 HOP</span><span style="color: #7A7A7A">SAMPLE DATA</span></div>
+<div style="position: absolute; left: 0; top: 36px; right: 0; bottom: 0">
+<sc-for list="{{edges}}" as="e" hint-placeholder-count="9"><div style="{{e.style}}"></div></sc-for>
+<sc-for list="{{nodes}}" as="n" hint-placeholder-count="10"><div style="{{n.style}}">{{n.label}}</div></sc-for>
+</div>
+</section>
+
+<section style="background: #050505; padding: 12px 14px; overflow: hidden">
+<div style="color: #FF9F1C; font-weight: 500; margin-bottom: 10px">2) PROFILE</div>
+<div style="font-size: 22px; color: #FFFFFF; font-weight: 600">NVIDIA CORP <span style="color: #FF9F1C">NVDA</span></div>
+<div style="color: #7A7A7A; margin-top: 4px">NASDAQ · CIK 1045810 · SIC 3674 SEMICONDUCTORS</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; background: #262626; margin-top: 14px">
+<div style="background: #0D0D0D; padding: 10px"><div style="color: #7A7A7A">REV FY</div><div style="color: #FFFFFF; font-size: 16px; margin-top: 4px">[XBRL]</div></div>
+<div style="background: #0D0D0D; padding: 10px"><div style="color: #7A7A7A">NET INC</div><div style="color: #FFFFFF; font-size: 16px; margin-top: 4px">[XBRL]</div></div>
+<div style="background: #0D0D0D; padding: 10px"><div style="color: #7A7A7A">R&amp;D</div><div style="color: #FFFFFF; font-size: 16px; margin-top: 4px">[XBRL]</div></div>
+</div>
+<div style="color: #7A7A7A; margin: 16px 0 6px">INDUSTRY TAGS</div>
+<sc-for list="{{tags}}" as="t" hint-placeholder-count="5">
+<div style="display: grid; grid-template-columns: 1fr 110px 120px; padding: 5px 0; border-bottom: 1px solid #1A1A1A">
+<span style="color: #FFFFFF">{{t.tag}}</span><span style="color: #4FC1FF">{{t.role}}</span><span style="color: #7A7A7A">{{t.bar}}</span>
+</div>
+</sc-for>
+</section>
+
+<section style="background: #050505; padding: 12px 14px; overflow: hidden">
+<div style="color: #FF9F1C; font-weight: 500; margin-bottom: 8px">3) RELATIONSHIPS</div>
+<div style="display: grid; grid-template-columns: 70px 140px 1fr 60px 90px; color: #7A7A7A; padding: 4px 0; border-bottom: 1px solid #262626">
+<span>TICKER</span><span>RELATION</span><span>COUNTERPARTY</span><span>CONF</span><span>SOURCE</span>
+</div>
+<sc-for list="{{rels}}" as="r" hint-placeholder-count="8">
+<div style="display: grid; grid-template-columns: 70px 140px 1fr 60px 90px; padding: 5px 0; border-bottom: 1px solid #141414">
+<span style="color: #FF9F1C">{{r.t}}</span><span style="color: {{r.c}}">{{r.rel}}</span><span style="color: #FFFFFF">{{r.name}}</span><span>{{r.conf}}</span><a href="#">10-K</a>
+</div>
+</sc-for>
+</section>
+
+<section style="background: #050505; padding: 12px 14px; overflow: hidden">
+<div style="color: #FF9F1C; font-weight: 500; margin-bottom: 8px">4) PIPELINE LOG</div>
+<sc-for list="{{log}}" as="l" hint-placeholder-count="6">
+<div style="padding: 4px 0; color: #A6A6A6"><span style="color: #7A7A7A">{{l.t}}</span>  {{l.m}}</div>
+</sc-for>
+</section>
+</div>
+
+<div style="height: 32px; flex: none; display: flex; gap: 1px; background: #262626">
+<sc-for list="{{fkeys}}" as="f" hint-placeholder-count="6">
+<span style="flex: 1; background: #0D0D0D; display: flex; align-items: center; justify-content: center; gap: 8px; color: #A6A6A6"><span style="background: #FF9F1C; color: #120A00; padding: 0 5px; font-weight: 600">{{f.k}}</span>{{f.l}}</span>
+</sc-for>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const W = 790, H = 470, cx = W / 2, cy = H / 2 - 10;
+    const ring = [['TSM', 's'], ['TER', 'c'], ['ISRG', 'c'], ['SYM', 'c'], ['TSLA', 'c'], ['TM', 'c'], ['MSFT', 'c'], ['AMZN', 'c'], ['LMT', 'c']];
+    const pos = ring.map((r, i) => { const a = -Math.PI / 2 + 2 * Math.PI * i / ring.length; return { id: r[0], k: r[1], x: cx + 300 * Math.cos(a), y: cy + 175 * Math.sin(a) }; });
+    const box = (x, y, w, bg, fg, bd) => 'position:absolute;left:' + (x - w / 2) + 'px;top:' + (y - 13) + 'px;width:' + w + 'px;height:26px;box-sizing:border-box;border:1px solid ' + bd + ';background:' + bg + ';color:' + fg + ';display:flex;align-items:center;justify-content:center;font:500 12px IBM Plex Mono,monospace;z-index:2';
+    const nodes = [{ label: 'NVDA', style: box(cx, cy, 80, '#FF9F1C', '#120A00', '#FF9F1C') }]
+      .concat(pos.map((p) => ({ label: p.id, style: box(p.x, p.y, 64, '#0D0D0D', p.k === 's' ? '#4FC1FF' : '#FFFFFF', p.k === 's' ? '#4FC1FF' : '#3A3A3A') })));
+    const edges = pos.map((p) => { const dx = p.x - cx, dy = p.y - cy; return { style: 'position:absolute;left:' + cx + 'px;top:' + cy + 'px;width:' + Math.sqrt(dx * dx + dy * dy) + 'px;border-top:1px ' + (p.k === 's' ? 'solid #4FC1FF' : 'solid #4D4D4D') + ';transform-origin:0 0;transform:rotate(' + (Math.atan2(dy, dx) * 180 / Math.PI) + 'deg);z-index:1' }; });
+    const bar = (n) => '█'.repeat(n) + '░'.repeat(10 - n);
+    return {
+      nodes, edges,
+      tags: [['ai compute', 'platform', 10], ['semiconductors', 'maker', 10], ['data centers', 'supplier', 9], ['robotics', 'supplier', 8], ['automotive', 'supplier', 7]].map(([tag, role, n]) => ({ tag, role, bar: bar(n) })),
+      rels: [['TSM', 'SUPPLIED BY', 'Taiwan Semiconductor', '0.92', '#4FC1FF'], ['TER', 'SUPPLIES', 'Teradyne', '0.81', '#D9D9D9'], ['ISRG', 'SUPPLIES', 'Intuitive Surgical', '0.77', '#D9D9D9'], ['SYM', 'SUPPLIES', 'Symbotic', '0.74', '#D9D9D9'], ['TSLA', 'SUPPLIES', 'Tesla', '0.88', '#D9D9D9'], ['TM', 'SUPPLIES', 'Toyota Motor', '0.70', '#D9D9D9'], ['MSFT', 'SUPPLIES', 'Microsoft', '0.90', '#D9D9D9'], ['AMZN', 'SUPPLIES', 'Amazon', '0.86', '#D9D9D9']]
+        .map(([t, rel, name, conf, c]) => ({ t, rel, name, conf, c })),
+      log: [['23:01:04', 'FIND NVDA → CIK 1045810'], ['23:01:05', 'PROFILE SIC 3674'], ['23:01:09', 'FETCH 10-K (cached)'], ['23:02:41', 'TAGS 5 · RELATIONSHIPS 9'], ['23:02:42', 'EXPAND 1 HOP → 9 COMPANIES QUEUED'], ['23:03:10', 'TER 10-K … processing']]
+        .map(([t, m]) => ({ t, m })),
+      fkeys: [['F1', 'COMPANY'], ['F2', 'INDUSTRY'], ['F3', 'TAGS'], ['F4', 'FILINGS'], ['F5', 'EXPAND'], ['F6', 'EXPORT']].map(([k, l]) => ({ k, l }))
+    };
+  }
+}
+</script>
+</body>
+</html>

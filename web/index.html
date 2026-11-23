@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Investment Terminal</title>
+<!-- Cytoscape.js (MIT) from a free CDN. To work fully offline, download it into web/vendor/. -->
+<script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<style>
+  :root { --bg:#0E1116; --panel:#161B22; --line:#21262D; --text:#E6EDF3; --muted:#8B949E; --amber:#F5A524; --blue:#58A6FF; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter, system-ui, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); background:#0B0E13; }
+  .logo { width:28px; height:28px; border-radius:6px; background:var(--amber); color:#1A1306; display:grid; place-items:center; font:600 12px ui-monospace, monospace; }
+  h1 { font-size:16px; margin:0 12px 0 0; }
+  select, input, button { height:38px; border-radius:6px; border:1px solid #30363D; background:var(--panel); color:var(--text); padding:0 10px; font:inherit; }
+  input { flex:1 1 260px; min-width:0; }
+  button { cursor:pointer; }
+  #banner { display:none; margin:12px 20px 0; padding:8px 12px; border:1px solid #5C4313; background:#1F1808; color:var(--amber); border-radius:8px; font-size:13px; }
+  main { display:flex; flex-wrap:wrap; gap:16px; padding:16px 20px; }
+  #cy { flex:999 1 560px; min-width:0; height:calc(100vh - 140px); min-height:420px; border:1px solid var(--line); border-radius:10px; background:#0B0E13; }
+  aside { flex:1 1 320px; min-width:280px; max-height:calc(100vh - 140px); overflow:auto; border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:18px; }
+  .label { font:12px ui-monospace, monospace; color:var(--muted); margin:14px 0 6px; }
+  .chip { display:inline-block; margin:0 6px 6px 0; padding:4px 10px; border-radius:6px; border:1px solid #1F4A7A; background:#0D1B2A; color:#79B8FF; font-size:12px; cursor:pointer; }
+  .cite { border-top:1px solid var(--line); padding:8px 0; font-size:13px; color:#C9D1D9; }
+  .cite a { color:var(--blue); }
+  .stat { font:12px ui-monospace, monospace; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">IT</div>
+  <h1>Investment Terminal</h1>
+  <label for="dataset" class="stat">Industry</label>
+  <select id="dataset"></select>
+  <label for="q" class="stat">Find</label>
+  <input id="q" placeholder="Company name or ticker">
+  <span id="stats" class="stat"></span>
+</header>
+<div id="banner">Sample data: relationships are illustrative, not extracted from filings. Run the pipeline to replace it.</div>
+<main>
+  <div id="cy" role="img" aria-label="Network graph of companies and their relationships"></div>
+  <aside id="panel"><div class="label">Company panel</div><p>Select a company in the graph.</p><div id="analytics"></div></aside>
+</main>
+<script>
+// Datasets come from web/data/index.json, which every `itx export | company | tag` updates.
+const FALLBACK = ["sample-robotics"];
+let INDEX = [];
+const REL_COLORS = { supplies:"#6E7681", competes_with:"#8957E5", partners_with:"#3FB950",
+  subsidiary_of:"#D29922", acquired:"#D29922", invested_in:"#D29922", contracted_by:"#58A6FF",
+  manufactures_for:"#6E7681" };
+let cy, DATA;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+async function available() {
+  const sel = $("dataset");
+  try { INDEX = (await (await fetch("data/index.json")).json()).datasets || []; } catch (_) { INDEX = []; }
+  if (!INDEX.some((d) => d.file === "sample-robotics")) INDEX.push({ file: "sample-robotics", label: "Robotics (sample)", mode: "industry" });
+  const group = { company: "Company: ", tag: "", industry: "Industry: " };
+  for (const d of INDEX) sel.add(new Option((group[d.mode] || "") + d.label, d.file));
+  if (!sel.options.length) { $("panel").innerHTML = "<p>No data yet. Run <code>itx export robotics</code>, then serve this folder with <code>python -m http.server</code>.</p>"; return; }
+  sel.onchange = () => load(sel.value);
+  load(sel.value);
+}
+
+async function load(name) {
+  DATA = await (await fetch(`data/${name}.json`)).json();
+  $("banner").style.display = DATA.sample ? "block" : "none";
+  $("stats").textContent = `${DATA.nodes.length} companies · ${DATA.edges.length} links`;
+  const segIndex = Object.fromEntries((DATA.segments || []).map((s, i) => [s, i]));
+  const elements = [
+    ...DATA.nodes.map((n) => ({ data: { id: n.id, label: n.ticker ? `${n.name}\n${n.ticker}` : n.name,
+      seg: segIndex[n.segment] ?? -1, inInd: n.in_industry ? 1 : 0, listed: n.listed ? 1 : 0 } })),
+    ...DATA.edges.map((e, i) => ({ data: { id: "e" + i, source: e.source, target: e.target, rel: e.relation,
+      color: REL_COLORS[e.relation] || "#6E7681", w: 1 + 2 * (e.confidence || 0) } })),
+  ];
+  if (cy) cy.destroy();
+  cy = cytoscape({
+    container: $("cy"), elements, wheelSensitivity: 0.2,
+    layout: { name: "cose", animate: false, nodeRepulsion: 9000, idealEdgeLength: 120 },
+    style: [
+      { selector: "node", style: { label: "data(label)", "text-wrap": "wrap", "font-size": 10, color: "#E6EDF3",
+        "text-valign": "bottom", "text-margin-y": 4, width: 18, height: 18, "background-color": "#30363D",
+        "border-width": 1, "border-color": "#6E7681" } },
+      { selector: "node[inInd = 1]", style: { "background-color": "#1F6FEB", width: 24, height: 24 } },
+      { selector: "node[listed = 0]", style: { shape: "round-rectangle", "background-color": "#21262D" } },
+      { selector: "edge", style: { width: "data(w)", "line-color": "data(color)", "target-arrow-color": "data(color)",
+        "target-arrow-shape": "triangle", "curve-style": "bezier", opacity: 0.7 } },
+      { selector: "edge[rel = 'competes_with']", style: { "line-style": "dashed", "target-arrow-shape": "none" } },
+      { selector: ".faded", style: { opacity: 0.12 } },
+      { selector: "node.focus", style: { "background-color": "#F5A524", "border-color": "#F5A524" } },
+      { selector: "edge.focus", style: { "line-color": "#F5A524", "target-arrow-color": "#F5A524", opacity: 1 } },
+    ],
+  });
+  cy.on("tap", "node", (ev) => select(ev.target.id()));
+  cy.on("tap", (ev) => { if (ev.target === cy) clear(); });
+  showAnalytics();
+  if (DATA.mode === "company" && DATA.center) select(DATA.center);
+}
+
+// Tag chip: open that tag's dataset if it was exported, otherwise highlight matches here.
+function openTag(tag) {
+  const file = "tag-" + tag.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  if (INDEX.some((d) => d.file === file)) { $("dataset").value = file; load(file); return; }
+  const ids = new Set(DATA.nodes.filter((n) => (n.tags || []).some((t) => t.tag === tag)).map((n) => n.id));
+  cy.elements().addClass("faded").removeClass("focus");
+  cy.nodes().filter((n) => ids.has(n.id())).removeClass("faded").addClass("focus");
+  $("stats").textContent = `${ids.size} companies here tagged "${tag}" · run: itx tag "${tag}" for the full set`;
+}
+
+function nodeById(id) { return DATA.nodes.find((n) => n.id === id); }
+
+function select(id) {
+  const n = nodeById(id); if (!n) return;
+  const hood = cy.getElementById(id).closedNeighborhood();
+  cy.elements().addClass("faded").removeClass("focus");
+  hood.removeClass("faded").addClass("focus");
+  const out = DATA.edges.filter((e) => e.source === id), inc = DATA.edges.filter((e) => e.target === id);
+  const chips = (list, key) => list.map((e) => { const o = nodeById(e[key]);
+    return `<span class="chip" data-id="${esc(o.id)}">${esc(o.name)} · ${esc(e.relation.replace("_", " "))}</span>`; }).join("") || '<span class="stat">None found</span>';
+  const fin = n.financials ? Object.entries(n.financials).map(([k, v]) =>
+    `<div class="stat">${esc(k)}: ${Number(v.value).toLocaleString()} USD (FY ending ${esc(v.period_end)})</div>`).join("") : '<div class="stat">No XBRL financials</div>';
+  const cites = [...out, ...inc].flatMap((e) => e.citations.map((c) => ({ ...c, e }))).slice(0, 12).map((c) =>
+    `<div class="cite">“${esc(c.evidence)}”<br><span class="stat">${esc(c.form || "")} ${esc(c.filed || "")} · ${esc(c.section || "")} · conf ${(c.confidence ?? 0).toFixed(2)}</span>
+     ${c.filing_url ? ` · <a href="${esc(c.filing_url)}" target="_blank" rel="noopener">filing</a>` : ""}</div>`).join("");
+  $("panel").innerHTML = `
+    <h2 style="margin:0;font-size:18px">${esc(n.name)}</h2>
+    <div style="font:13px ui-monospace,monospace;color:var(--amber)">${esc(n.ticker || "Not SEC-listed")}${n.segment ? ` · <span style="color:var(--muted)">${esc(n.segment)}</span>` : ""}</div>
+    ${n.sic ? `<div class="stat">SIC ${esc(n.sic)} · ${esc(n.sic_desc || "")}</div>` : ""}
+    <div class="label">Industries (tags from its filing)</div>
+    ${(n.tags || []).map((t) => `<span class="chip tag" data-tag="${esc(t.tag)}">${esc(t.tag)} · ${esc(t.role)}</span>`).join("") ||
+      `<span class="stat">${n.listed ? (n.expanded ? "No tags" : "Not processed yet: itx company " + esc(n.ticker)) : "Not an SEC filer"}</span>`}
+    <div class="label">Outgoing (supplies, partners…)</div>${chips(out, "target")}
+    <div class="label">Incoming (suppliers, investors…)</div>${chips(inc, "source")}
+    <div class="label">Financials (XBRL)</div>${fin}
+    <div class="label">Evidence from filings</div>${cites || '<span class="stat">No citations</span>'}`;
+  $("panel").querySelectorAll(".chip[data-id]").forEach((c) => c.onclick = () => select(c.dataset.id));
+  $("panel").querySelectorAll(".chip.tag").forEach((c) => c.onclick = () => openTag(c.dataset.tag));
+}
+
+function clear() { cy.elements().removeClass("faded focus"); $("panel").innerHTML = '<div class="label">Company panel</div><p>Select a company in the graph.</p><div id="analytics"></div>'; showAnalytics(); }
+
+function showAnalytics() {
+  const a = DATA.analytics || {}, el = $("analytics"); if (!el) return;
+  const name = (id) => (nodeById(id) || {}).name || id;
+  const top = Object.entries(a.customers_per_supplier || {}).slice(0, 8)
+    .map(([id, n]) => `<div class="stat">${esc(name(id))}: ${n} customer(s)</div>`).join("");
+  const bc = Object.entries(a.betweenness || {}).filter(([, v]) => v > 0).slice(0, 8)
+    .map(([id, v]) => `<div class="stat">${esc(name(id))}: ${v.toFixed(3)}</div>`).join("");
+  el.innerHTML = `<div class="label">Most-relied-on suppliers</div>${top || '<span class="stat">n/a</span>'}
+                  <div class="label">Chokepoints (betweenness)</div>${bc || '<span class="stat">n/a</span>'}`;
+}
+
+$("q").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !DATA) return;
+  const q = e.target.value.trim().toLowerCase();
+  const hit = DATA.nodes.find((n) => (n.ticker || "").toLowerCase() === q || n.name.toLowerCase().includes(q));
+  if (hit) { select(hit.id); cy.animate({ center: { eles: cy.getElementById(hit.id) }, zoom: 1.4 }); }
+});
+available();
+</script>
+</body>
+</html>

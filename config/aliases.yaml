@@ -1,0 +1,18 @@
+# Manual aliases: name as written in filings  ->  SEC ticker (listed) or canonical name (private/foreign).
+# Grow this file as you review unresolved names (`itx review`).
+TSMC: TSM
+Taiwan Semiconductor: TSM
+Taiwan Semiconductor Manufacturing: TSM
+Nvidia: NVDA
+Universal Robots: TER        # subsidiary of Teradyne
+Mobile Industrial Robots: TER
+MiR: TER
+ULA: United Launch Alliance  # Boeing / Lockheed JV, not listed
+United Launch Alliance: United Launch Alliance
+SpaceX: Space Exploration Technologies  # private
+Harmonic Drive: Harmonic Drive Systems  # Tokyo-listed, not an SEC filer
+Nabtesco: Nabtesco                      # Tokyo-listed, not an SEC filer
+Fanuc: FANUC                            # Tokyo-listed (OTC ADR, not an SEC filer)
+NASA: National Aeronautics and Space Administration
+DoD: U.S. Department of Defense
+Department of Defense: U.S. Department of Defense

@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Investment Terminal: industry graph</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E1116}
+a{color:#58A6FF}a:hover{color:#79B8FF}
+input::placeholder{color:#8B949E}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #0E1116; color: #E6EDF3; font-family: Inter, system-ui, sans-serif; font-size: 14px">
+<header style="border-bottom: 1px solid #21262D; background: #0B0E13">
+<div style="max-width: 1400px; margin: 0 auto; padding: 14px 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 16px">
+<div style="display: flex; align-items: center; gap: 10px; margin-right: 8px">
+<div style="width: 30px; height: 30px; border-radius: 6px; background: #F5A524; color: #1A1306; display: flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 13px">IT</div>
+<div style="font-weight: 600; font-size: 16px; letter-spacing: 0.2px">Investment Terminal</div>
+</div>
+<div style="display: flex; gap: 4px; padding: 4px; border: 1px solid #21262D; border-radius: 8px">
+<a href="Company.dc.html" style="height: 36px; padding: 0 14px; border-radius: 6px; color: #8B949E; display: flex; align-items: center; font-size: 13px; font-weight: 500; text-decoration: none">Company</a>
+<span style="height: 36px; padding: 0 14px; border-radius: 6px; background: #21262D; color: #E6EDF3; display: flex; align-items: center; font-size: 13px; font-weight: 500">Industry</span>
+</div>
+<div style="display: flex; flex: 1 1 360px; gap: 8px; align-items: center; min-width: 0">
+<label for="q" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E; white-space: nowrap">Search</label>
+<input id="q" type="text" value="{{query}}" onChange="{{onQuery}}" onKeyDown="{{onKey}}" placeholder="Industry or company, e.g. robotics, satellites, NVDA" style="flex: 1 1 auto; min-width: 0; height: 40px; box-sizing: border-box; padding: 0 12px; border-radius: 6px; border: 1px solid #30363D; background: #161B22; color: #E6EDF3; font-family: 'JetBrains Mono', monospace; font-size: 13px">
+<button type="button" onClick="{{doSearch}}" style="height: 40px; padding: 0 16px; border-radius: 6px; border: none; background: #F5A524; color: #1A1306; font-family: Inter, sans-serif; font-weight: 600; font-size: 13px; cursor: pointer">Run</button>
+</div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="2">
+<button type="button" onClick="{{c.pick}}" style="{{c.style}}">{{c.label}}</button>
+</sc-for>
+</div>
+</div>
+</header>
+
+<main style="max-width: 1400px; margin: 0 auto; padding: 20px 24px 40px; box-sizing: border-box">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px">
+<h1 style="margin: 0; font-size: 22px; font-weight: 600">{{industryName}}</h1>
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E">{{statLine}}</span>
+<span style="font-size: 12px; color: #F5A524; border: 1px solid #5C4313; background: #1F1808; padding: 3px 8px; border-radius: 999px">Sample data · relationships illustrative</span>
+</div>
+<div style="display: flex; gap: 4px; padding: 4px; border: 1px solid #21262D; border-radius: 8px; background: #0B0E13">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="2">
+<button type="button" onClick="{{t.pick}}" style="{{t.style}}">{{t.label}}</button>
+</sc-for>
+</div>
+</div>
+
+<sc-if value="{{msg}}" hint-placeholder-val="{{ false }}">
+<div style="margin-bottom: 14px; padding: 10px 14px; border-radius: 8px; border: 1px solid #30363D; background: #161B22; color: #C9D1D9; font-size: 13px">{{msg}}</div>
+</sc-if>
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+<section style="flex: 999 1 560px; min-width: 0">
+<sc-if value="{{isGraph}}" hint-placeholder-val="{{ true }}">
+<div style="border: 1px solid #21262D; border-radius: 10px; background: #0B0E13; overflow-x: auto">
+<div style="position: relative; width: 760px; height: 560px; margin: 0 auto">
+<sc-for list="{{segs}}" as="s" hint-placeholder-count="3">
+<div style="{{s.style}}">{{s.label}}</div>
+</sc-for>
+<sc-for list="{{edges}}" as="e" hint-placeholder-count="10">
+<div style="{{e.style}}"></div>
+</sc-for>
+<sc-for list="{{nodes}}" as="n" hint-placeholder-count="12">
+<button type="button" onClick="{{n.pick}}" style="{{n.style}}" aria-label="{{n.aria}}">
+<span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px">{{n.name}}</span>
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8B949E">{{n.ticker}}</span>
+</button>
+</sc-for>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 18px; margin-top: 10px; font-size: 12px; color: #8B949E">
+<span>Lines run supplier → customer, left to right</span>
+<span style="color: #F5A524">Amber: selected company and its links</span>
+<span style="color: #58A6FF">Blue: direct partners</span>
+</div>
+</sc-if>
+
+<sc-if value="{{isTable}}" hint-placeholder-val="{{ false }}">
+<div style="border: 1px solid #21262D; border-radius: 10px; background: #0B0E13; overflow-x: auto">
+<div style="min-width: 640px">
+<div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1.6fr 0.8fr; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #21262D; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E">
+<span>Company</span><span>Ticker</span><span>Exchange</span><span>Segment</span><span>Links</span>
+</div>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="10">
+<button type="button" onClick="{{r.pick}}" style="{{r.style}}">
+<span style="font-weight: 500">{{r.name}}</span>
+<span style="font-family: 'JetBrains Mono', monospace; color: #F5A524">{{r.ticker}}</span>
+<span style="color: #8B949E">{{r.exch}}</span>
+<span style="color: #C9D1D9">{{r.segName}}</span>
+<span style="font-family: 'JetBrains Mono', monospace">{{r.links}}</span>
+</button>
+</sc-for>
+</div>
+</div>
+</sc-if>
+</section>
+
+<aside style="flex: 1 1 300px; min-width: 280px; border: 1px solid #21262D; border-radius: 10px; background: #161B22; padding: 20px; box-sizing: border-box">
+<sc-if value="{{noSel}}" hint-placeholder-val="{{ true }}">
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E; margin-bottom: 8px">Company panel</div>
+<p style="margin: 0 0 16px; color: #C9D1D9; line-height: 1.6">Select a company in the graph or table to see its role, supply-chain links and competitors.</p>
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E; margin-bottom: 8px">Segments</div>
+<sc-for list="{{segSummary}}" as="g" hint-placeholder-count="3">
+<div style="display: flex; justify-content: space-between; padding: 10px 0; border-top: 1px solid #21262D; font-size: 13px">
+<span>{{g.label}}</span><span style="font-family: 'JetBrains Mono', monospace; color: #8B949E">{{g.count}}</span>
+</div>
+</sc-for>
+</sc-if>
+
+<sc-if value="{{hasSel}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px">
+<div>
+<h2 style="margin: 0 0 4px; font-size: 18px; font-weight: 600">{{sel.name}}</h2>
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #F5A524">{{sel.ticker}} <span style="color: #8B949E">· {{sel.exch}}</span></div>
+</div>
+<button type="button" onClick="{{clearSel}}" aria-label="Close company panel" style="width: 36px; height: 36px; border-radius: 6px; border: 1px solid #30363D; background: transparent; color: #C9D1D9; cursor: pointer; font-size: 16px; line-height: 1">×</button>
+</div>
+<div style="margin-top: 12px; display: inline-block; font-size: 12px; color: #C9D1D9; border: 1px solid #30363D; padding: 3px 8px; border-radius: 999px">{{sel.segName}}</div>
+<p style="margin: 12px 0 18px; color: #C9D1D9; line-height: 1.6">{{sel.role}}</p>
+
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E; margin-bottom: 6px">Supplies to</div>
+<sc-if value="{{supEmpty}}" hint-placeholder-val="{{ false }}"><div style="font-size: 13px; color: #8B949E; margin-bottom: 14px">No customers named in sample filings</div></sc-if>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px">
+<sc-for list="{{supplies}}" as="x" hint-placeholder-count="2">
+<button type="button" onClick="{{x.pick}}" style="min-height: 32px; padding: 4px 10px; border-radius: 6px; border: 1px solid #1F4A7A; background: #0D1B2A; color: #79B8FF; font-size: 12px; cursor: pointer">{{x.name}} · {{x.ticker}}</button>
+</sc-for>
+</div>
+
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E; margin-bottom: 6px">Supplied by</div>
+<sc-if value="{{byEmpty}}" hint-placeholder-val="{{ false }}"><div style="font-size: 13px; color: #8B949E; margin-bottom: 14px">No suppliers named in sample filings</div></sc-if>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px">
+<sc-for list="{{suppliedBy}}" as="x" hint-placeholder-count="2">
+<button type="button" onClick="{{x.pick}}" style="min-height: 32px; padding: 4px 10px; border-radius: 6px; border: 1px solid #1F4A7A; background: #0D1B2A; color: #79B8FF; font-size: 12px; cursor: pointer">{{x.name}} · {{x.ticker}}</button>
+</sc-for>
+</div>
+
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E; margin-bottom: 6px">Competes with</div>
+<sc-if value="{{compEmpty}}" hint-placeholder-val="{{ false }}"><div style="font-size: 13px; color: #8B949E; margin-bottom: 14px">None flagged</div></sc-if>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px">
+<sc-for list="{{competes}}" as="x" hint-placeholder-count="2">
+<button type="button" onClick="{{x.pick}}" style="min-height: 32px; padding: 4px 10px; border-radius: 6px; border: 1px solid #30363D; background: #0E1116; color: #C9D1D9; font-size: 12px; cursor: pointer">{{x.name}} · {{x.ticker}}</button>
+</sc-for>
+</div>
+
+<div style="border-top: 1px solid #21262D; padding-top: 14px">
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E; margin-bottom: 6px">Financials</div>
+<p style="margin: 0 0 14px; font-size: 13px; color: #C9D1D9; line-height: 1.6">Revenue, margins and R&amp;D spend load here from XBRL once the pipeline is connected.</p>
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8B949E; margin-bottom: 6px">Sources</div>
+<p style="margin: 0; font-size: 13px; color: #C9D1D9; line-height: 1.6">Each link will cite the filing section it came from (e.g. 10-K, Item 1 Business) with a confidence score.</p>
+</div>
+</sc-if>
+</aside>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":960}}'>
+class Component extends DCLogic {
+  data() {
+    return {
+      robotics: {
+        name: 'Robotics',
+        segs: ['Components & chips', 'Robot makers', 'Customers'],
+        nodes: [
+          { id: 'r1', name: 'NVIDIA', ticker: 'NVDA', exch: 'Nasdaq', seg: 0, role: 'AI compute and simulation platforms used to train and run robots.' },
+          { id: 'r2', name: 'Harmonic Drive Systems', ticker: '6324', exch: 'Tokyo', seg: 0, role: 'Strain-wave gear reducers for robot joints.' },
+          { id: 'r3', name: 'Nabtesco', ticker: '6268', exch: 'Tokyo', seg: 0, role: 'RV precision reducers for heavy industrial arms.' },
+          { id: 'r4', name: 'Keyence', ticker: '6861', exch: 'Tokyo', seg: 0, role: 'Sensors and machine-vision systems.' },
+          { id: 'r5', name: 'Ouster', ticker: 'OUST', exch: 'NYSE', seg: 0, role: 'Digital lidar sensors for perception.' },
+          { id: 'r6', name: 'Fanuc', ticker: '6954', exch: 'Tokyo', seg: 1, role: 'Industrial robot arms and CNC systems.' },
+          { id: 'r7', name: 'Yaskawa Electric', ticker: '6506', exch: 'Tokyo', seg: 1, role: 'Industrial robots, servo motors and drives.' },
+          { id: 'r8', name: 'ABB', ticker: 'ABBN', exch: 'SIX', seg: 1, role: 'Industrial robotics and factory automation.' },
+          { id: 'r9', name: 'Teradyne', ticker: 'TER', exch: 'Nasdaq', seg: 1, role: 'Collaborative robots through Universal Robots and MiR.' },
+          { id: 'r10', name: 'Intuitive Surgical', ticker: 'ISRG', exch: 'Nasdaq', seg: 1, role: 'Surgical robotics (da Vinci systems).' },
+          { id: 'r11', name: 'Symbotic', ticker: 'SYM', exch: 'Nasdaq', seg: 1, role: 'AI-driven warehouse automation systems.' },
+          { id: 'r12', name: 'Toyota Motor', ticker: 'TM', exch: 'NYSE', seg: 2, role: 'Automotive manufacturing, a major buyer of industrial robots.' },
+          { id: 'r13', name: 'Walmart', ticker: 'WMT', exch: 'NYSE', seg: 2, role: 'Retail distribution centers automating storage and picking.' },
+          { id: 'r14', name: 'Amazon', ticker: 'AMZN', exch: 'Nasdaq', seg: 2, role: 'Fulfillment and logistics operations.' }
+        ],
+        edges: [['r1','r9'],['r1','r10'],['r1','r11'],['r2','r6'],['r2','r7'],['r2','r9'],['r3','r6'],['r3','r7'],['r3','r8'],['r4','r6'],['r4','r8'],['r5','r11'],['r6','r12'],['r7','r12'],['r8','r12'],['r9','r14'],['r11','r13'],['r11','r14']],
+        comp: [['r6','r7'],['r6','r8'],['r7','r8'],['r2','r3'],['r9','r8']]
+      },
+      space: {
+        name: 'Space',
+        segs: ['Components', 'Launch & spacecraft', 'Operators & data'],
+        nodes: [
+          { id: 's1', name: 'Hexcel', ticker: 'HXL', exch: 'NYSE', seg: 0, role: 'Carbon-fiber composites for structures and fairings.' },
+          { id: 's2', name: 'Teledyne Technologies', ticker: 'TDY', exch: 'NYSE', seg: 0, role: 'Imaging sensors and space instruments.' },
+          { id: 's3', name: 'Mercury Systems', ticker: 'MRCY', exch: 'Nasdaq', seg: 0, role: 'Rugged processing electronics.' },
+          { id: 's4', name: 'Redwire', ticker: 'RDW', exch: 'NYSE', seg: 0, role: 'Solar arrays and space infrastructure.' },
+          { id: 's5', name: 'Rocket Lab', ticker: 'RKLB', exch: 'Nasdaq', seg: 1, role: 'Small launch vehicles and spacecraft.' },
+          { id: 's6', name: 'Lockheed Martin', ticker: 'LMT', exch: 'NYSE', seg: 1, role: 'Satellites and space systems.' },
+          { id: 's7', name: 'Northrop Grumman', ticker: 'NOC', exch: 'NYSE', seg: 1, role: 'Spacecraft and solid rocket motors.' },
+          { id: 's8', name: 'Boeing', ticker: 'BA', exch: 'NYSE', seg: 1, role: 'Satellites, and launch through United Launch Alliance.' },
+          { id: 's9', name: 'Planet Labs', ticker: 'PL', exch: 'NYSE', seg: 2, role: 'Earth-imaging satellite constellation.' },
+          { id: 's10', name: 'Iridium', ticker: 'IRDM', exch: 'Nasdaq', seg: 2, role: 'Global satellite communications.' },
+          { id: 's11', name: 'AST SpaceMobile', ticker: 'ASTS', exch: 'Nasdaq', seg: 2, role: 'Space-based cellular broadband.' },
+          { id: 's12', name: 'Viasat', ticker: 'VSAT', exch: 'Nasdaq', seg: 2, role: 'Satellite broadband and communications.' }
+        ],
+        edges: [['s1','s5'],['s1','s7'],['s1','s8'],['s2','s6'],['s2','s7'],['s3','s6'],['s3','s7'],['s4','s5'],['s4','s6'],['s5','s9'],['s5','s11'],['s8','s12']],
+        comp: [['s6','s7'],['s7','s8'],['s6','s8'],['s10','s11'],['s10','s12'],['s11','s12']]
+      }
+    };
+  }
+
+  renderVals() {
+    const st = this.state || {};
+    const all = this.data();
+    const ind = st.ind || 'robotics';
+    const view = st.view || 'graph';
+    const selId = st.sel || null;
+    const D = all[ind];
+    const colX = [100, 380, 660];
+    const byId = {};
+    D.nodes.forEach((n) => { byId[n.id] = n; });
+
+    const counts = [0, 0, 0];
+    D.nodes.forEach((n) => { counts[n.seg] += 1; });
+    const idx = [0, 0, 0];
+    const pos = {};
+    D.nodes.forEach((n) => {
+      const sp = counts[n.seg] > 5 ? 80 : 88;
+      const i = idx[n.seg]++;
+      pos[n.id] = { x: colX[n.seg] - 90, y: 64 + i * sp };
+    });
+
+    const nb = new Set();
+    if (selId) {
+      D.edges.forEach(([a, b]) => { if (a === selId) nb.add(b); if (b === selId) nb.add(a); });
+    }
+    const pick = (id) => () => this.setState({ sel: id, view: 'graph', msg: '' });
+
+    const nodes = D.nodes.map((n) => {
+      const p = pos[n.id];
+      const isSel = n.id === selId;
+      const isNb = nb.has(n.id);
+      const dim = selId && !isSel && !isNb;
+      const border = isSel ? '#F5A524' : (isNb ? '#58A6FF' : '#30363D');
+      const bg = isSel ? '#2B2112' : (isNb ? '#0D1B2A' : '#161B22');
+      return {
+        name: n.name, ticker: n.ticker, pick: pick(n.id),
+        aria: n.name + ', ' + n.ticker + ', ' + D.segs[n.seg],
+        style: 'position:absolute;left:' + p.x + 'px;top:' + p.y + 'px;width:180px;height:40px;box-sizing:border-box;border-radius:6px;border:1px solid ' + border + ';background:' + bg + ';color:#E6EDF3;font-family:Inter,sans-serif;text-align:left;padding:0 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;opacity:' + (dim ? 0.4 : 1) + ';transition:opacity .15s,border-color .15s'
+      };
+    });
+
+    const edges = D.edges.map(([a, b]) => {
+      const pa = pos[a], pb = pos[b];
+      const x1 = pa.x + 180, y1 = pa.y + 20, x2 = pb.x, y2 = pb.y + 20;
+      const dx = x2 - x1, dy = y2 - y1;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      const ang = Math.atan2(dy, dx) * 180 / Math.PI;
+      const on = selId && (a === selId || b === selId);
+      const color = on ? '#F5A524' : '#6E7681';
+      const op = selId ? (on ? 1 : 0.15) : 0.55;
+      const w = on ? 2 : 1.25;
+      return { style: 'position:absolute;left:' + x1 + 'px;top:' + y1 + 'px;width:' + len + 'px;height:0;border-top:' + w + 'px solid ' + color + ';transform-origin:0 0;transform:rotate(' + ang + 'deg);opacity:' + op + ';pointer-events:none' };
+    });
+
+    const segs = D.segs.map((s, i) => ({
+      label: s,
+      style: 'position:absolute;left:' + (colX[i] - 90) + 'px;top:18px;width:180px;font-family:JetBrains Mono,monospace;font-size:12px;color:#8B949E;border-bottom:1px solid #21262D;padding-bottom:8px'
+    }));
+
+    const linkCount = (id) => D.edges.filter(([a, b]) => a === id || b === id).length;
+    const rows = D.nodes.map((n, i) => ({
+      name: n.name, ticker: n.ticker, exch: n.exch, segName: D.segs[n.seg], links: linkCount(n.id), pick: pick(n.id),
+      style: 'display:grid;grid-template-columns:2fr 1fr 1fr 1.6fr 0.8fr;gap:12px;width:100%;padding:12px 16px;min-height:44px;align-items:center;border:none;border-bottom:1px solid #21262D;background:' + (i % 2 ? '#0E1116' : '#0B0E13') + ';color:#E6EDF3;font-family:Inter,sans-serif;font-size:13px;text-align:left;cursor:pointer'
+    }));
+
+    const toItem = (id) => ({ name: byId[id].name, ticker: byId[id].ticker, pick: pick(id) });
+    let sel = null, supplies = [], suppliedBy = [], competes = [];
+    if (selId && byId[selId]) {
+      const n = byId[selId];
+      sel = { name: n.name, ticker: n.ticker, exch: n.exch, role: n.role, segName: D.segs[n.seg] };
+      supplies = D.edges.filter(([a]) => a === selId).map(([, b]) => toItem(b));
+      suppliedBy = D.edges.filter(([, b]) => b === selId).map(([a]) => toItem(a));
+      competes = D.comp.filter(([a, b]) => a === selId || b === selId).map(([a, b]) => toItem(a === selId ? b : a));
+    }
+
+    const chipStyle = (on) => 'height:40px;padding:0 14px;border-radius:999px;border:1px solid ' + (on ? '#F5A524' : '#30363D') + ';background:' + (on ? '#F5A524' : 'transparent') + ';color:' + (on ? '#1A1306' : '#E6EDF3') + ';font-family:Inter,sans-serif;font-size:13px;font-weight:500;cursor:pointer';
+    const chips = [['robotics', 'Robotics'], ['space', 'Space']].map(([k, l]) => ({
+      label: l, style: chipStyle(k === ind),
+      pick: () => this.setState({ ind: k, sel: null, msg: '', q: '' })
+    }));
+    const tabStyle = (on) => 'height:36px;padding:0 14px;border-radius:6px;border:none;background:' + (on ? '#21262D' : 'transparent') + ';color:' + (on ? '#E6EDF3' : '#8B949E') + ';font-family:Inter,sans-serif;font-size:13px;font-weight:500;cursor:pointer';
+    const tabs = [['graph', 'Graph'], ['table', 'Companies']].map(([k, l]) => ({
+      label: l, style: tabStyle(k === view), pick: () => this.setState({ view: k })
+    }));
+
+    const doSearch = () => {
+      const q = (this.state && this.state.q || '').trim().toLowerCase();
+      if (!q) return;
+      if (/robot|automation|humanoid|cobot|actuator/.test(q)) { this.setState({ ind: 'robotics', sel: null, msg: '' }); return; }
+      if (/space|satellite|launch|rocket|orbit/.test(q)) { this.setState({ ind: 'space', sel: null, msg: '' }); return; }
+      for (const k of Object.keys(all)) {
+        const hit = all[k].nodes.find((n) => n.ticker.toLowerCase() === q || n.name.toLowerCase().indexOf(q) !== -1);
+        if (hit) { this.setState({ ind: k, sel: hit.id, view: 'graph', msg: '' }); return; }
+      }
+      this.setState({ msg: 'No sample data for "' + q + '" yet. In the full terminal this would run a new search across filings.' });
+    };
+
+    return {
+      query: st.q || '',
+      onQuery: (e) => this.setState({ q: e.target.value }),
+      onKey: (e) => { if (e.key === 'Enter') doSearch(); },
+      doSearch,
+      chips, tabs,
+      industryName: D.name + ' supply chain',
+      statLine: D.nodes.length + ' companies · ' + D.segs.length + ' segments · ' + D.edges.length + ' supply links',
+      msg: st.msg || '',
+      isGraph: view === 'graph', isTable: view === 'table',
+      segs, edges, nodes, rows,
+      segSummary: D.segs.map((s, i) => ({ label: s, count: counts[i] + ' companies' })),
+      noSel: !sel, hasSel: !!sel, sel: sel || {},
+      supplies, suppliedBy, competes,
+      supEmpty: supplies.length === 0, byEmpty: suppliedBy.length === 0, compEmpty: competes.length === 0,
+      clearSel: () => this.setState({ sel: null })
+    };
+  }
+}
+</script>
+</body>
+</html>

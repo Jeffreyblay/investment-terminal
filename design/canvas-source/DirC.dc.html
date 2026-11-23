@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Direction C: map canvas</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#4F46E5}a:hover{color:#4338CA}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; position: relative; overflow: hidden; background-color: #EEF0F4; background-image: radial-gradient(#CDD2DB 1px, transparent 1px); background-size: 24px 24px; font-family: Inter, sans-serif; font-size: 14px; color: #111827">
+<sc-for list="{{edges}}" as="e" hint-placeholder-count="12"><div style="{{e.style}}"></div></sc-for>
+<sc-for list="{{nodes}}" as="n" hint-placeholder-count="13">
+<div style="{{n.style}}"><span style="{{n.dot}}">{{n.initial}}</span><span style="display: flex; flex-direction: column; line-height: 1.25"><span style="font-weight: 600; font-size: 13px">{{n.name}}</span><span style="font-size: 11px; color: #4B5563">{{n.sub}}</span></span></div>
+</sc-for>
+
+<div style="position: absolute; left: 50%; top: 24px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 18px; background: #FFFFFF; border: 1px solid #DDE1E8; border-radius: 999px; width: 640px; box-sizing: border-box">
+<label for="sc" style="position: absolute; left: -9999px">Search companies</label>
+<input id="sc" value="NVIDIA" style="flex: 1; height: 40px; border: none; outline: none; font: 15px Inter, sans-serif; color: #111827; background: transparent">
+<div style="display: flex; gap: 2px; padding: 3px; background: #F1F3F7; border-radius: 999px">
+<span style="padding: 7px 12px; font-size: 13px; color: #4B5563">This</span>
+<span style="padding: 7px 12px; font-size: 13px; background: #111827; color: #FFFFFF; border-radius: 999px">1 hop</span>
+<span style="padding: 7px 12px; font-size: 13px; color: #4B5563">2 hops</span>
+</div>
+<button type="button" style="height: 44px; padding: 0 20px; border: none; border-radius: 999px; background: #4F46E5; color: #FFFFFF; font: 600 14px Inter, sans-serif">Explore</button>
+</div>
+
+<div style="position: absolute; left: 24px; top: 24px; width: 300px; padding: 20px; background: #FFFFFF; border: 1px solid #DDE1E8; border-radius: 16px; box-sizing: border-box">
+<div style="font-family: 'Space Grotesk', sans-serif; font-size: 18px; font-weight: 600">Investment Terminal</div>
+<div style="font-size: 12px; color: #4B5563; margin-top: 2px">Sample data · illustrative links</div>
+<div style="font-size: 12px; color: #4B5563; margin: 18px 0 8px">Colour by industry</div>
+<sc-for list="{{legend}}" as="l" hint-placeholder-count="5">
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0">
+<span style="display: flex; align-items: center; gap: 10px"><span style="{{l.dot}}"></span>{{l.tag}}</span><span style="font-size: 12px; color: #4B5563">{{l.n}}</span>
+</div>
+</sc-for>
+</div>
+
+<div style="position: absolute; right: 24px; top: 24px; bottom: 24px; width: 360px; padding: 24px; background: #FFFFFF; border: 1px solid #DDE1E8; border-radius: 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; align-items: center; gap: 14px">
+<span style="width: 52px; height: 52px; border-radius: 14px; background: #4F46E5; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font: 600 20px 'Space Grotesk', sans-serif">N</span>
+<div><div style="font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 600">NVIDIA</div><div style="font-size: 13px; color: #4B5563">NVDA · Nasdaq · SIC 3674</div></div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px">
+<sc-for list="{{tags}}" as="t" hint-placeholder-count="5"><span style="{{t.style}}">{{t.tag}} · {{t.role}}</span></sc-for>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+<div style="background: #F5F6F9; border-radius: 10px; padding: 10px"><div style="font-size: 11px; color: #4B5563">Revenue</div><div style="font-weight: 600; margin-top: 2px">[XBRL]</div></div>
+<div style="background: #F5F6F9; border-radius: 10px; padding: 10px"><div style="font-size: 11px; color: #4B5563">Suppliers</div><div style="font-weight: 600; margin-top: 2px">1</div></div>
+<div style="background: #F5F6F9; border-radius: 10px; padding: 10px"><div style="font-size: 11px; color: #4B5563">Customers</div><div style="font-weight: 600; margin-top: 2px">8</div></div>
+</div>
+<div style="font-size: 12px; color: #4B5563">Connections</div>
+<sc-for list="{{rels}}" as="r" hint-placeholder-count="6">
+<div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #EEF0F4">
+<span style="font-weight: 500">{{r.name}}</span><span style="font-size: 12px; color: #4B5563">{{r.rel}}</span>
+</div>
+</sc-for>
+<a href="#" style="margin-top: auto; height: 44px; border-radius: 10px; border: 1px solid #DDE1E8; display: flex; align-items: center; justify-content: center; text-decoration: none; color: #111827; font-weight: 500">View evidence from filings</a>
+</div>
+
+<div style="position: absolute; left: 24px; bottom: 24px; display: flex; gap: 8px">
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="4"><span style="{{c.style}}">{{c.label}}</span></sc-for>
+</div>
+<div style="position: absolute; right: 408px; bottom: 24px; display: flex; flex-direction: column; background: #FFFFFF; border: 1px solid #DDE1E8; border-radius: 10px; overflow: hidden">
+<button type="button" aria-label="Zoom in" style="width: 44px; height: 44px; border: none; border-bottom: 1px solid #DDE1E8; background: #FFFFFF; font-size: 18px; color: #111827">+</button>
+<button type="button" aria-label="Zoom out" style="width: 44px; height: 44px; border: none; background: #FFFFFF; font-size: 18px; color: #111827">−</button>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const C = { 'ai compute': '#4F46E5', 'semiconductors': '#0EA5E9', 'robotics': '#F97316', 'automotive': '#10B981', 'cloud software': '#A855F7', 'defense': '#64748B' };
+    const cx = 690, cy = 470;
+    const ring = [['TSM', 'Taiwan Semi', 'semiconductors', 'supplier'], ['TER', 'Teradyne', 'robotics', 'customer'], ['ISRG', 'Intuitive Surgical', 'robotics', 'customer'], ['SYM', 'Symbotic', 'robotics', 'customer'], ['TSLA', 'Tesla', 'automotive', 'customer'], ['TM', 'Toyota', 'automotive', 'customer'], ['MSFT', 'Microsoft', 'cloud software', 'customer'], ['AMZN', 'Amazon', 'cloud software', 'customer'], ['LMT', 'Lockheed Martin', 'defense', 'customer']];
+    const pos = ring.map((r, i) => { const a = -Math.PI / 2 + 2 * Math.PI * i / ring.length + 0.35; return { id: r[0], name: r[1], tag: r[2], kind: r[3], x: cx + 260 * Math.cos(a), y: cy + 260 * Math.sin(a) }; });
+    const card = (x, y, w, border, bw) => 'position:absolute;left:' + (x - w / 2) + 'px;top:' + (y - 26) + 'px;width:' + w + 'px;height:52px;box-sizing:border-box;padding:0 12px;display:flex;align-items:center;gap:10px;background:#FFFFFF;border:' + bw + 'px solid ' + border + ';border-radius:12px;z-index:2';
+    const dot = (c, s) => 'width:' + s + 'px;height:' + s + 'px;flex:none;border-radius:8px;background:' + c + ';color:#FFFFFF;display:flex;align-items:center;justify-content:center;font:600 12px Inter,sans-serif';
+    const nodes = [{ name: 'NVIDIA', sub: 'NVDA · searched', initial: 'N', dot: dot('#4F46E5', 30), style: card(cx, cy, 190, '#4F46E5', 2) }]
+      .concat(pos.map((p) => ({ name: p.name, sub: p.id + ' · ' + p.kind, initial: p.name[0], dot: dot(C[p.tag], 26), style: card(p.x, p.y, 176, '#DDE1E8', 1) })));
+    const edges = pos.map((p) => { const dx = p.x - cx, dy = p.y - cy; return { style: 'position:absolute;left:' + cx + 'px;top:' + cy + 'px;width:' + Math.sqrt(dx * dx + dy * dy) + 'px;border-top:' + (p.kind === 'supplier' ? '2px solid #4F46E5' : '1.5px dashed #9CA3AF') + ';transform-origin:0 0;transform:rotate(' + (Math.atan2(dy, dx) * 180 / Math.PI) + 'deg);z-index:1' }; });
+    const tint = (c) => 'height:28px;padding:0 10px;display:inline-flex;align-items:center;border-radius:8px;font-size:12px;color:#111827;border:1px solid ' + c + ';background:#FFFFFF';
+    return {
+      nodes, edges,
+      legend: [['ai compute', 1], ['semiconductors', 1], ['robotics', 3], ['automotive', 2], ['cloud software', 2]].map(([tag, n]) => ({ tag, n, dot: 'width:12px;height:12px;border-radius:4px;background:' + C[tag] })),
+      tags: [['ai compute', 'platform'], ['semiconductors', 'maker'], ['robotics', 'supplier'], ['automotive', 'supplier'], ['data centers', 'supplier']].map(([tag, role]) => ({ tag, role, style: tint(C[tag] || '#9CA3AF') })),
+      rels: [['Taiwan Semiconductor', 'supplies NVIDIA'], ['Tesla', 'customer'], ['Microsoft', 'customer'], ['Amazon', 'customer'], ['Teradyne', 'customer'], ['Toyota', 'customer']].map(([name, rel]) => ({ name, rel })),
+      chips: [['All links', true], ['Suppliers', false], ['Customers', false], ['Competitors', false]].map(([label, on]) => ({ label, style: 'height:36px;padding:0 14px;display:inline-flex;align-items:center;border-radius:999px;font-size:13px;font-weight:500;border:1px solid ' + (on ? '#111827' : '#DDE1E8') + ';background:' + (on ? '#111827' : '#FFFFFF') + ';color:' + (on ? '#FFFFFF' : '#111827') }))
+    };
+  }
+}
+</script>
+</body>
+</html>

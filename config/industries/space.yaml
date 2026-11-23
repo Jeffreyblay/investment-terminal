@@ -1,0 +1,31 @@
+name: Space
+segments:
+  - Components
+  - Launch & spacecraft
+  - Operators & data
+
+seeds:
+  - { ticker: RKLB, segment: Launch & spacecraft }
+  - { ticker: LMT,  segment: Launch & spacecraft }
+  - { ticker: NOC,  segment: Launch & spacecraft }
+  - { ticker: BA,   segment: Launch & spacecraft }
+  - { ticker: HXL,  segment: Components }
+  - { ticker: TDY,  segment: Components }
+  - { ticker: MRCY, segment: Components }
+  - { ticker: RDW,  segment: Components }
+  - { ticker: PL,   segment: Operators & data }
+  - { ticker: IRDM, segment: Operators & data }
+  - { ticker: ASTS, segment: Operators & data }
+  - { ticker: VSAT, segment: Operators & data }
+
+keywords:
+  - launch vehicle
+  - satellite constellation
+  - spacecraft
+  - low earth orbit
+  - payload
+  - solar array
+  - propulsion
+  - ground station
+  - earth observation
+  - space-qualified
