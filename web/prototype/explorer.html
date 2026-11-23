@@ -14,13 +14,22 @@ button{font-family:inherit}
 input::placeholder{color:#6B7280}
 input[type=range]{accent-color:#4F46E5}
 .mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+#map .dimmed{opacity:0.12 !important;transition:opacity .12s}
+#map [data-node]{user-select:none}
 </style>
 </head>
 <body>
 <div style="position:relative;width:100%;height:100vh;min-height:860px;min-width:1280px;overflow:hidden;background-color:#EEF0F4;background-image:radial-gradient(#CDD2DB 1px,transparent 1px);background-size:24px 24px;font-size:14px;color:#111827">
 
-  <div style="position:absolute;left:328px;right:408px;top:92px;bottom:380px">
-    <div id="map" style="position:absolute;left:50%;top:50%;width:640px;height:400px;transform:translate(-50%,-50%)"></div>
+  <!-- Map area: scroll = zoom, drag background = pan, drag a card = move it, double-click = explore it. -->
+  <div id="area" style="position:absolute;left:328px;right:408px;top:92px;bottom:308px;overflow:hidden;cursor:grab;touch-action:none">
+    <div id="map" style="position:absolute;left:0;top:0;width:640px;height:400px;transform-origin:0 0"></div>
+    <div id="zoomctl" style="position:absolute;right:10px;bottom:10px;display:flex;flex-direction:column;gap:4px;z-index:6">
+      <button type="button" id="zin" title="Zoom in" aria-label="Zoom in" style="width:34px;height:34px;border-radius:8px;border:1px solid #DDE1E8;background:#fff;font:600 16px Inter,sans-serif;cursor:pointer">+</button>
+      <button type="button" id="zout" title="Zoom out" aria-label="Zoom out" style="width:34px;height:34px;border-radius:8px;border:1px solid #DDE1E8;background:#fff;font:600 16px Inter,sans-serif;cursor:pointer">−</button>
+      <button type="button" id="zfit" title="Fit and reset layout" aria-label="Fit and reset layout" style="width:34px;height:34px;border-radius:8px;border:1px solid #DDE1E8;background:#fff;font:600 10px Inter,sans-serif;cursor:pointer">Fit</button>
+    </div>
+    <div class="mono" style="position:absolute;left:10px;bottom:10px;font-size:11px;color:#9CA3AF;z-index:6;pointer-events:none">scroll to zoom · drag to pan or move cards · double-click to explore</div>
   </div>
 
   <div style="position:absolute;left:328px;right:408px;top:24px;display:flex;justify-content:center">
@@ -35,17 +44,6 @@ input[type=range]{accent-color:#4F46E5}
   <div id="msg" style="position:absolute;left:328px;right:408px;top:82px;display:none;justify-content:center;z-index:5"></div>
 
   <div id="left" style="position:absolute;left:24px;top:24px;width:280px;padding:18px 20px;background:#fff;border:1px solid #DDE1E8;border-radius:16px;box-sizing:border-box"></div>
-
-  <div style="position:absolute;left:328px;right:408px;bottom:308px;height:56px;padding:0 16px;background:#fff;border:1px solid #DDE1E8;border-radius:14px;box-sizing:border-box;display:flex;align-items:center;gap:14px">
-    <label for="yr" class="mono" style="font-size:12px;font-weight:500;color:#4B5563">AS OF</label>
-    <span id="yearLabel" style="font-family:'Space Grotesk',sans-serif;font-size:20px;font-weight:600;width:52px">2025</span>
-    <div style="flex:1;min-width:120px;display:flex;flex-direction:column">
-      <input id="yr" type="range" min="2021" max="2025" step="1" value="2025" style="width:100%;margin:0">
-      <div id="yrTicks" class="mono" style="display:flex;justify-content:space-between;font-size:11px;color:#6B7280"></div>
-    </div>
-    <span id="staleBtn"></span>
-    <div id="views" style="display:flex;gap:2px;padding:3px;background:#F1F3F7;border-radius:999px"></div>
-  </div>
 
   <div id="panel" style="position:absolute;right:24px;top:24px;bottom:24px;width:360px;padding:22px;background:#fff;border:1px solid #DDE1E8;border-radius:16px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;overflow:auto"></div>
 
@@ -83,15 +81,19 @@ function fromApi(b) {
   const links = [], competes = [];
   b.edges.forEach((e) => {
     const a = idOf[e.source], t = idOf[e.target];
-    if (e.relation === 'competes_with') { competes.push([a, t, e.confidence]); return; }
     const ys = (e.citations || []).map((c) => yearOf(c.filed)).filter(Boolean);
+    // Competitors carry years too, so the timeline filters them like every other link.
+    if (e.relation === 'competes_with') {
+      competes.push([a, t, e.confidence, ys.length ? Math.min(...ys) : null, ys.length ? Math.max(...ys) : null]);   // no date: always shown
+      return;
+    }
     links.push({ from: a, to: t, rel: e.relation, comp: (e.components || [])[0] || null,   // only components the filing named
       // importance.py: 'major' customer (thick line) / 'single_source' supplier (red line)
       imp: e.importance === 'single_source' ? 'single' : (e.importance === 'major' ? 'major' : null),
       pct: e.revenue_pct == null ? null : e.revenue_pct, country: null, conf: e.confidence,
       first: ys.length ? Math.min(...ys) : THIS_YEAR, last: ys.length ? Math.max(...ys) : THIS_YEAR });
   });
-  const all = links.flatMap((l) => [l.first, l.last]);
+  const all = links.flatMap((l) => [l.first, l.last]).concat(competes.flatMap((p) => [p[3], p[4]])).filter((y) => y != null);
   const hi = all.length ? Math.max(...all) : THIS_YEAR, lo = all.length ? Math.min(...all, hi - 4) : hi - 4;
   const centerNode = b.nodes.find((n) => n.id === b.center) || {};
   return { companies, links, competes, live: true, centerId: idOf[b.center], filings: b.filings || [],
@@ -252,7 +254,9 @@ class Component extends DCLogic {
     const active = D.links.filter((l) => l.first <= year).map((l) => ({ ...l, stale: l.last < year })).filter((l) => showStale || !l.stale);
     const inL = (id) => active.filter((l) => l.to === id);
     const outL = (id) => active.filter((l) => l.from === id);
-    const comN = (id) => D.competes.filter(([a, b]) => a === id || b === id).map(([a, b]) => (a === id ? b : a));
+    // Competitors known by `year` (sample pairs have no years and always show).
+    const rivals = D.competes.filter((p) => p[3] == null || p[3] <= year);
+    const comN = (id) => rivals.filter(([a, b]) => a === id || b === id).map(([a, b]) => (a === id ? b : a));
 
     const pick = (id) => () => this.setState({ sel: id });
     // Live: re-centring on another listed company fetches its own graph from the API.
@@ -339,6 +343,10 @@ class Component extends DCLogic {
       });
     }
 
+    // Cards the user dragged keep their place for this view (reset with the Fit button).
+    const layoutKey = (D.live ? 'L' : 'S') + '|' + (comp || centerId) + '|' + view + '|' + depth + '|' + filter;
+    Object.keys(pos).forEach((id) => { const o = NODE_OFFSETS[layoutKey + '|' + id]; if (o) pos[id] = { ...pos[id], x: pos[id].x + o.dx, y: pos[id].y + o.dy }; });
+
     // ----- exposure -----
     const dependsOn = (id) => byId[id] && (byId[id].country === expo || inL(id).some((l) => l.country === expo));
     const expoHits = expo === 'all' ? [] : visible.filter((id) => id !== CN && dependsOn(id));
@@ -347,7 +355,7 @@ class Component extends DCLogic {
     const nodes = visible.map((id) => {
       const p = pos[id];
       if (id === CN) {
-        return { name: comp, sub: 'component', initial: 'C', aria: 'Component ' + comp, pick: pick(CN),
+        return { id, name: comp, sub: 'component', initial: 'C', aria: 'Component ' + comp, pick: pick(CN),
           subStyle: 'font-size:11px;color:#D1D5DB', dot: 'width:28px;height:28px;flex:none;border-radius:50%;background:#FFFFFF;color:#111827;display:flex;align-items:center;justify-content:center;font:600 12px Inter,sans-serif',
           style: 'position:absolute;left:' + Math.round(p.x - 85) + 'px;top:' + Math.round(p.y - 25) + 'px;width:170px;height:50px;box-sizing:border-box;padding:0 12px;display:flex;align-items:center;gap:8px;background:#111827;color:#FFFFFF;border:2px solid ' + (selId === CN ? '#4F46E5' : '#111827') + ';border-radius:999px;cursor:pointer;font-family:Inter,sans-serif;z-index:3' };
       }
@@ -359,7 +367,7 @@ class Component extends DCLogic {
       const small = compact && !isC;   // the searched company keeps its full-size card
       const w = small ? NW : 150, h = small ? NH : 46, d = small ? 22 : 28;
       return {
-        name: c.name, sub, initial: c.name[0], aria: c.name + ', ' + sub, pick: pick(id), title: c.name + ' · ' + sub,
+        id, name: c.name, sub, initial: c.name[0], aria: c.name + ', ' + sub, pick: pick(id), title: c.name + ' · ' + sub,
         subStyle: small ? 'display:none' : 'font-size:11px;white-space:nowrap;color:' + (warn ? '#DC2626' : '#4B5563'),
         dot: 'width:' + d + 'px;height:' + d + 'px;flex:none;border-radius:' + (small ? 6 : 8) + 'px;background:' + colOf(main(c)) + ';color:#FFFFFF;display:flex;align-items:center;justify-content:center;font:600 ' + (small ? 11 : 12) + 'px Inter,sans-serif',
         style: 'position:absolute;left:' + Math.round(p.x - w / 2) + 'px;top:' + Math.round(p.y - h / 2) + 'px;width:' + w + 'px;height:' + h + 'px;' + (small ? 'padding:0 8px !important;' : '') + 'box-sizing:border-box;padding:0 10px;display:flex;align-items:center;gap:8px;background:#FFFFFF;border:' + (isS || isC || border === '#D97706' ? 2 : 1) + 'px ' + (c.listed ? 'solid ' : 'dashed ') + border + ';border-radius:12px;cursor:pointer;font-family:Inter,sans-serif;color:#111827;z-index:2;opacity:' + (faded ? 0.28 : 1) + ';transition:opacity .15s'
@@ -375,7 +383,7 @@ class Component extends DCLogic {
       });
     } else {
       active.forEach((l) => { if (hop[l.from] != null && hop[l.to] != null) segs.push([l.from, l.to, l]); });
-      if (filter === 'all' || filter === 'com') D.competes.forEach(([a, b]) => { if (hop[a] != null && hop[b] != null) segs.push([a, b, null]); });
+      if (filter === 'all' || filter === 'com') rivals.forEach(([a, b]) => { if (hop[a] != null && hop[b] != null) segs.push([a, b, null]); });
     }
     const edges = segs.map(([a, b, l]) => {
       const pa = pos[a], pb = pos[b], dx = pb.x - pa.x, dy = pb.y - pa.y;
@@ -387,7 +395,7 @@ class Component extends DCLogic {
       else if (l.imp === 'major') line = '4px solid ' + (on ? '#4F46E5' : '#818CF8');
       else line = (on ? '2px solid #4F46E5' : '1.5px solid #B8BEC9');
       const dim = tag || (expo !== 'all' && !(l && (l.country === expo)));
-      return { style: 'position:absolute;left:' + pa.x + 'px;top:' + pa.y + 'px;width:' + Math.sqrt(dx * dx + dy * dy) + 'px;border-top:' + line + ';transform-origin:0 0;transform:rotate(' + (Math.atan2(dy, dx) * 180 / Math.PI) + 'deg);z-index:1;opacity:' + (dim ? 0.3 : (l && l.stale ? 0.6 : 1)) };
+      return { a, b, style: 'position:absolute;left:' + pa.x + 'px;top:' + pa.y + 'px;width:' + Math.sqrt(dx * dx + dy * dy) + 'px;border-top:' + line + ';transform-origin:0 0;transform:rotate(' + (Math.atan2(dy, dx) * 180 / Math.PI) + 'deg);z-index:1;opacity:' + (dim ? 0.3 : (l && l.stale ? 0.6 : 1)) };
     });
 
     // ----- left card -----
@@ -517,7 +525,8 @@ class Component extends DCLogic {
         ? ['NVDA', 'TER', 'ISRG', 'RKLB', 'SYM'].map((t) => [t, () => liveCompany(t)])
         : [['NVDA', recenter('NVDA')], ['SYM', recenter('SYM')], ['RKLB', recenter('RKLB')], ['lidar', openComp('lidar')], ['harmonic reducers', openComp('harmonic reducers')]]
       ).map(([t, f]) => ({ t, pick: f })),
-      years: D.years, live: !!D.live, api: API, loadedIn: D.loadedIn, mapW, mapH,
+      years: D.years, live: !!D.live, api: API, loadedIn: D.loadedIn, mapW, mapH, layoutKey,
+      explore: (id) => (id !== CN && byId[id] && byId[id].listed ? recenter(id)() : null),
       p,
       tabs: [['rel', comp ? 'Supply' : 'Relationships'], ['risk', 'Chokepoints']].map(([k, l]) => ({ label: l, style: tabSeg(k === tab && !tag), pick: () => this.setState({ tab: k, tag: null }) })),
       inTag: !!tag, exitTag: () => this.setState({ tag: null }), filters,
@@ -552,30 +561,39 @@ function money(v, key) {
   return s + '$' + a;
 }
 
-function spark(vals) {               // oldest -> newest, 60x18
+function spark(vals, mark) {         // oldest -> newest, 60x18; `mark` = index of the year shown
   if (vals.length < 2) return '';
   const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
-  const pts = vals.map((v, i) => ((i / (vals.length - 1)) * 56 + 2) + ',' + (16 - ((v - lo) / span) * 14)).join(' ');
-  return '<svg width="60" height="18" aria-hidden="true"><polyline points="' + pts + '" fill="none" stroke="#4F46E5" stroke-width="1.5"/></svg>';
+  const xy = (v, i) => [(i / (vals.length - 1)) * 56 + 2, 16 - ((v - lo) / span) * 14];
+  const pts = vals.map((v, i) => xy(v, i).join(',')).join(' ');
+  const dot = mark == null ? '' : (([x, y]) => '<circle cx="' + x + '" cy="' + y + '" r="2.6" fill="#4F46E5"/>')(xy(vals[mark], mark));
+  return '<svg width="60" height="18" aria-hidden="true"><polyline points="' + pts + '" fill="none" stroke="#4F46E5" stroke-width="1.5"/>' + dot + '</svg>';
 }
 
-function finTable(h) {
-  let group = '', rows = '';
-  // Header date: the newest fiscal year across all metrics (not whichever metric comes first).
-  const latest = { period_end: Object.values(h).map((s) => (s[0] || {}).period_end || '').sort().pop() };
+// Financials as of the timeline year: each metric shows the latest fiscal year ending in or before it,
+// the change vs the year before that, and a dot on the 5-year sparkline.
+function finTable(h, asOf) {
+  let group = '', rows = '', shown = '';
+  const yearOf = (d) => Number(String(d).slice(0, 4));
   for (const [key, label, g] of METRICS) {
-    const s = h[key]; if (!s || !s.length) continue;
+    const s = h[key]; if (!s || !s.length) continue;            // newest first
+    const i = asOf == null ? 0 : s.findIndex((r) => yearOf(r.period_end) <= asOf);
     if (g !== group) { group = g; rows += '<div style="grid-column:1/-1;font-size:11px;color:#6B7280;margin-top:6px;letter-spacing:0.04em">' + g.toUpperCase() + '</div>'; }
-    const cur = s[0].value, prev = s[1] && s[1].value;
+    if (i < 0) {                                                 // no data that far back
+      rows += '<span style="color:#9CA3AF;font-family:Inter,sans-serif">' + label + '</span><span style="text-align:right;color:#9CA3AF">–</span><span></span><span></span>';
+      continue;
+    }
+    if (s[i].period_end > shown) shown = s[i].period_end;
+    const cur = s[i].value, prev = s[i + 1] && s[i + 1].value;
     const chg = prev ? (cur - prev) / Math.abs(prev) * 100 : null;
-    rows += '<span title="FY ending ' + esc(s[0].period_end) + '" style="color:#374151;font-family:Inter,sans-serif">' + label + '</span>' +
+    rows += '<span title="FY ending ' + esc(s[i].period_end) + '" style="color:#374151;font-family:Inter,sans-serif">' + label + '</span>' +
       '<span style="text-align:right;font-weight:500">' + money(cur, key) + '</span>' +
-      '<span>' + spark(s.map((r) => r.value).reverse()) + '</span>' +
+      '<span>' + spark(s.map((r) => r.value).reverse(), s.length - 1 - i) + '</span>' +
       '<span style="text-align:right;color:' + (chg == null ? '#9CA3AF' : chg >= 0 ? '#059669' : '#DC2626') + '">' +
         (chg == null ? '' : (chg >= 0 ? '+' : '') + chg.toFixed(0) + '%') + '</span>';
   }
-  return '<div><div style="font-size:12px;color:#4B5563;margin-bottom:4px">Financials · FY ending ' + esc(latest.period_end || '') +
-    ' · 5-year trend · vs prior year</div>' +
+  return '<div><div style="font-size:12px;color:#4B5563;margin-bottom:4px">Financials · FY ending ' + esc(shown || '–') +
+    (asOf != null ? ' · as of ' + asOf : '') + ' · 5-year trend · vs prior year</div>' +
     '<div class="mono" style="display:grid;grid-template-columns:minmax(0,1fr) auto 60px 44px;gap:3px 10px;align-items:center;font-size:12px;color:#111827">' + rows + '</div></div>';
 }
 
@@ -610,28 +628,41 @@ function jobBlock(P) {
   return '';
 }
 
+// ---- map: zoom / pan / drag state ----
+const VIEW = { s: 1, tx: 0, ty: 0, manual: false, key: '' };   // screen = world * s + (tx, ty)
+const NODE_OFFSETS = {};                                       // layoutKey|id -> {dx, dy} from dragging
+let LAST_V = null;
+
+// Fit the layout into the map area, unless the user has zoomed / panned this same layout.
+function applyView(V) {
+  const map = $('map'), area = $('area');
+  const aw = (area && area.clientWidth) || V.mapW, ah = (area && area.clientHeight) || V.mapH;
+  const key = V.layoutKey + '|' + V.mapW + 'x' + V.mapH;
+  if (!VIEW.manual || VIEW.key !== key) {
+    const fit = Math.min(1, aw / V.mapW, ah / V.mapH);
+    Object.assign(VIEW, { s: fit, tx: (aw - V.mapW * fit) / 2, ty: (ah - V.mapH * fit) / 2, manual: false, key });
+  }
+  map.style.width = V.mapW + 'px'; map.style.height = V.mapH + 'px';
+  map.style.transform = 'translate(' + VIEW.tx.toFixed(1) + 'px,' + VIEW.ty.toFixed(1) + 'px) scale(' + VIEW.s.toFixed(4) + ')';
+}
+
+// Only the map (used while dragging, so the panel and table keep their scroll position).
+function renderMap(V) {
+  LAST_V = V;
+  applyView(V);
+  $('map').innerHTML =
+    V.regions.map((g) => '<div style="' + esc(g.style) + '"><span style="' + esc(g.labelStyle) + '">' + esc(g.label) + '</span></div>').join('') +
+    V.edges.map((e) => '<div data-a="' + esc(e.a) + '" data-b="' + esc(e.b) + '" style="' + esc(e.style) + '"></div>').join('') +
+    V.nodes.map((n) => btn(n, '<span style="' + esc(n.dot) + '">' + esc(n.initial) + '</span><span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;text-align:left"><span style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(n.name) + '</span><span style="' + esc(n.subStyle) + '">' + esc(n.sub) + '</span></span>', 'data-node="' + esc(n.id) + '" aria-label="' + esc(n.aria) + '" title="' + esc(n.title || n.aria) + '"')).join('');
+}
+
 function update() {
   H = [];
   const V = app.renderVals();
-
-  // map: sized to its layout, then scaled down (never up) to fit the space between the panels
-  const map = $('map'), area = map.parentElement;
-  const fit = area && area.clientWidth ? Math.min(1, area.clientWidth / V.mapW, area.clientHeight / V.mapH) : 1;
-  map.style.width = V.mapW + 'px'; map.style.height = V.mapH + 'px';
-  map.style.transform = 'translate(-50%,-50%) scale(' + fit.toFixed(3) + ')';
-  $('map').innerHTML =
-    V.regions.map((g) => '<div style="' + esc(g.style) + '"><span style="' + esc(g.labelStyle) + '">' + esc(g.label) + '</span></div>').join('') +
-    V.edges.map((e) => '<div style="' + esc(e.style) + '"></div>').join('') +
-    V.nodes.map((n) => btn(n, '<span style="' + esc(n.dot) + '">' + esc(n.initial) + '</span><span style="display:flex;flex-direction:column;line-height:1.25;min-width:0;text-align:left"><span style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(n.name) + '</span><span style="' + esc(n.subStyle) + '">' + esc(n.sub) + '</span></span>', 'aria-label="' + esc(n.aria) + '" title="' + esc(n.title || n.aria) + '"')).join('');
+  renderMap(V);
 
   // search bar, year bar
   $('depths').innerHTML = V.depths.map((d) => btn(d, esc(d.label))).join('');
-  $('views').innerHTML = V.views.map((v) => btn(v, esc(v.label))).join('');
-  $('staleBtn').innerHTML = btn({ pick: V.toggleStale, style: V.staleStyle }, esc(V.staleLabel));
-  $('yearLabel').textContent = V.year;
-  $('yr').min = V.years[0]; $('yr').max = V.years[V.years.length - 1];
-  $('yr').value = V.year;
-  $('yrTicks').innerHTML = V.years.map((y) => '<span>' + y + '</span>').join('');
   $('msg').style.display = V.msg ? 'flex' : 'none';
   $('msg').innerHTML = V.msg ? '<div style="max-width:660px;padding:10px 14px;background:#fff;border:1px solid #DDE1E8;border-radius:10px;font-size:13px;color:#374151">' + esc(V.msg) + '</div>' : '';
 
@@ -687,14 +718,86 @@ function update() {
     '<div style="' + esc(V.thead.style) + '">' + V.thead.cols.map((h) => '<span>' + esc(h) + '</span>').join('') + '</div>' +
     '<div style="flex:1;overflow:auto">' +
       V.rows.map((r) => btn(r, r.cells.map((c) => '<span style="' + esc(c.style) + '">' + esc(c.text) + '</span>').join(''))).join('') +
-      (V.noRows ? '<div style="padding:20px 16px;color:#6B7280;font-size:13px">Nothing here for ' + esc(V.year) + ' with these filters.</div>' : '') +
+      (V.noRows ? '<div style="padding:20px 16px;color:#6B7280;font-size:13px">Nothing here with these filters.</div>' : '') +
     '</div>';
 
   window.__V = V;
 }
 
 // events (static elements are bound once so typing and dragging aren't interrupted)
-document.addEventListener('click', (e) => { const el = e.target.closest('[data-h]'); if (el) H[Number(el.dataset.h)](); });
+let suppressClick = false;   // set after a drag, so letting go of a card doesn't also select it
+document.addEventListener('click', (e) => {
+  if (suppressClick) { suppressClick = false; return; }
+  const el = e.target.closest('[data-h]'); if (el) H[Number(el.dataset.h)]();
+});
+
+// ---- map interactions ----
+const area = $('area');
+const clampS = (v) => Math.min(4, Math.max(0.15, v));
+function zoomAt(factor, cx, cy) {             // keep the point under (cx, cy) where it is
+  const s2 = clampS(VIEW.s * factor), k = s2 / VIEW.s;
+  VIEW.tx = cx - (cx - VIEW.tx) * k; VIEW.ty = cy - (cy - VIEW.ty) * k; VIEW.s = s2; VIEW.manual = true;
+  if (LAST_V) applyView(LAST_V);
+}
+area.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const r = area.getBoundingClientRect();
+  zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+$('zin').addEventListener('click', () => zoomAt(1.25, area.clientWidth / 2, area.clientHeight / 2));
+$('zout').addEventListener('click', () => zoomAt(0.8, area.clientWidth / 2, area.clientHeight / 2));
+$('zfit').addEventListener('click', () => {   // fit, and put dragged cards back
+  if (LAST_V) Object.keys(NODE_OFFSETS).forEach((k) => { if (k.startsWith(LAST_V.layoutKey + '|')) delete NODE_OFFSETS[k]; });
+  VIEW.manual = false; update();
+});
+
+// Drag: on a card it moves the card, on the background it pans. Under 4 px it's a click.
+let drag = null;
+area.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || e.target.closest('#zoomctl')) return;
+  const card = e.target.closest('[data-node]');
+  drag = { id: card ? card.dataset.node : null, x: e.clientX, y: e.clientY, tx: VIEW.tx, ty: VIEW.ty, moved: false, base: null };
+  if (card && LAST_V) {
+    const k = LAST_V.layoutKey + '|' + drag.id;
+    drag.base = { ...(NODE_OFFSETS[k] || { dx: 0, dy: 0 }) };
+  }
+});
+window.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  if (!drag.moved) { drag.moved = true; area.style.cursor = 'grabbing'; highlight(null); }
+  if (drag.id && LAST_V) {                    // move the card (in map units)
+    NODE_OFFSETS[LAST_V.layoutKey + '|' + drag.id] = { dx: drag.base.dx + dx / VIEW.s, dy: drag.base.dy + dy / VIEW.s };
+    renderMap(app.renderVals());
+  } else {                                    // pan the view
+    VIEW.tx = drag.tx + dx; VIEW.ty = drag.ty + dy; VIEW.manual = true;
+    if (LAST_V) applyView(LAST_V);
+  }
+});
+window.addEventListener('pointerup', () => {
+  if (drag && drag.moved) suppressClick = true;
+  drag = null; area.style.cursor = 'grab';
+});
+
+// Double-click a card: explore from that company (live: fetches it).
+area.addEventListener('dblclick', (e) => {
+  const card = e.target.closest('[data-node]');
+  if (card && LAST_V) LAST_V.explore(card.dataset.node);
+});
+
+// Hover a card: highlight it, its links and its direct neighbours.
+function highlight(id) {
+  const map = $('map');
+  map.querySelectorAll('[data-a]').forEach((el) => { el.style.filter = ''; el.classList.toggle('dimmed', !!id && el.dataset.a !== id && el.dataset.b !== id); });
+  const near = new Set(id ? [id] : []);
+  if (id) map.querySelectorAll('[data-a]').forEach((el) => { if (el.dataset.a === id) near.add(el.dataset.b); if (el.dataset.b === id) near.add(el.dataset.a); });
+  map.querySelectorAll('[data-node]').forEach((el) => el.classList.toggle('dimmed', !!id && !near.has(el.dataset.node)));
+}
+area.addEventListener('mouseover', (e) => { if (drag && drag.moved) return; const c = e.target.closest('[data-node]'); highlight(c ? c.dataset.node : null); });
+area.addEventListener('mouseleave', () => highlight(null));
+
+
 let suggestTimer;
 $('xq').addEventListener('input', (e) => {
   app.state.q = e.target.value;
@@ -713,7 +816,6 @@ $('xq').addEventListener('input', (e) => {
 });
 $('xq').addEventListener('keydown', (e) => { if (e.key === 'Enter') window.__V.doSearch(); });
 $('go').addEventListener('click', () => window.__V.doSearch());
-$('yr').addEventListener('input', (e) => app.setState({ year: Number(e.target.value) }));
 window.addEventListener('resize', () => update());   // re-fit the map to the new window size
 update();
 
