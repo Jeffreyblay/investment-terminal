@@ -29,7 +29,11 @@ _REVENUE_SOON = re.compile(r"\b(?:revenues?|net\s+sales|sales)\b", re.I)
 _SHARE_OF_REVENUE = re.compile(
     r"(\d{1,3}(?:\.\d+)?)\s*(?:%|percent)\s+of\s+(?:our\s+|its\s+|the\s+company's\s+)?"
     r"(?:total\s+|net\s+|consolidated\s+)?(?:revenues?|net\s+sales|sales)\b", re.I)
-_MAJOR_WORDS = re.compile(r"\b(?:largest|major|significant|principal|key)\s+customers?\b", re.I)
+_MAJOR_PHRASE = r"(?:one\s+of\s+)?(?:our|its|the\s+company's)\s+(?:largest|major|significant|principal|key)\s+customers?\b(?!['’]s)"
+# "largest customer" must be said OF this company: "Walmart, our largest customer," / "Target is one of our
+# largest customers" / "our largest customer, Walmart". Not "our largest customer's program ... GlobalFoundries".
+_MAJOR_AFTER_NAME = re.compile(r"^[^.;]{0,25}?(?:,\s*|\s+(?:is|was|remains|became)\s+)" + _MAJOR_PHRASE, re.I)
+_MAJOR_BEFORE_NAME = re.compile(_MAJOR_PHRASE + r",?\s*(?:is\s+)?$", re.I)
 _SINGLE = re.compile(r"\b(?:sole|single)[\s-]+(?:source|supplier|manufacturer|provider|vendor)s?\b"
                      r"|\bonly\s+(?:source|supplier|manufacturer)\b", re.I)
 
@@ -68,7 +72,7 @@ def customer_importance(name: str, sents: list[str]) -> tuple[str | None, float 
             v = float(share.group(1))
             if 0 < v <= 100 and (best is None or v > best):
                 best = v
-        if _MAJOR_WORDS.search(s):
+        if _MAJOR_AFTER_NAME.search(s[m.end():]) or _MAJOR_BEFORE_NAME.search(s[max(0, m.start() - 60): m.start()]):
             major = True
     if best is not None and best >= 10:
         return MAJOR, best
@@ -106,6 +110,9 @@ def enrich_filing(st, accession: str, filer_id: str, text: str) -> int:
             imp, pct = customer_importance(buyer_name, sents)
         elif buyer == filer_id:                    # they sell to the filer: a supplier
             imp = supplier_importance(seller_name, sents)
-        st.db.execute("UPDATE relationships SET importance=?, revenue_pct=? WHERE id=?", (imp, pct, r["id"]))
+        # An explicit revenue share or sole-source statement confirms the link itself: count it as verified.
+        st.db.execute("""UPDATE relationships SET importance=?, revenue_pct=?,
+                         confidence = CASE WHEN ? IS NOT NULL THEN MAX(COALESCE(confidence, 0), 0.9)
+                                           ELSE confidence END WHERE id=?""", (imp, pct, imp, r["id"]))
         n += imp is not None
     return n

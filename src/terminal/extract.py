@@ -69,6 +69,57 @@ Rules:
 - If there are none, return {{"relationships": []}}."""
 
 
+# ---------- verification: a yes/no check per relationship ----------
+# Small models are much better at checking one stated claim than at extracting everything at once,
+# and this catches mistakes rules can't see, e.g. the right kind of sentence about the wrong parties
+# ("Walmart purchased units of Warehouse Technologies" read as "Symbotic invested in Warehouse").
+
+VERIFY_SCHEMA = {"type": "object", "properties": {"answer": {"type": "string", "enum": ["yes", "no", "unclear"]}},
+                 "required": ["answer"]}
+
+VERIFY_SYSTEM = """You check claims about companies against text from {company}'s annual report.
+In the text, "we", "us", "our" and "the Company" mean {company}.
+Answer "yes" only if the text clearly states the claim, including WHO does WHAT to WHOM (direction matters).
+A list of competitors ("Competitors in our X segment include A, B and C") states that each of them competes with {company}.
+Answer "no" if the text does not support it: a different company is involved, the direction is reversed,
+it is a product or place rather than a company, or the relationship type is wrong.
+Answer "unclear" if the claim is implied but not stated.
+Paying for, purchasing, ordering, licensing or contracting for products or services all count as buying.
+Reply as JSON: {{"answer": "yes" | "no" | "unclear"}}"""
+
+CLAIMS = {
+    "supplies": "{o} buys products or services from {s} ({o} is a customer of {s})",
+    "customer_of": "{s} buys products or services from {o} ({s} is a customer of {o})",
+    "competes_with": "{o} is a competitor of {s}",
+    "partners_with": "{s} has a partnership, collaboration, joint venture or licensing agreement with {o}",
+    "acquired": "{s} acquired {o}",
+    "invested_in": "{s} invested in {o} (owns equity in it)",
+    "subsidiary_of": "{s} is a subsidiary of {o}",
+    "contracted_by": "{s} received a contract from {o}",
+    "manufactures_for": "{s} manufactures products for {o}",
+}
+
+# Confidence from the verdict ("no" removes the relationship).
+VERDICT_CONFIDENCE = {"yes": 0.9, "unclear": 0.6}
+
+
+def verify_prompt(rel: Relationship, context: str = "") -> str:
+    claim = CLAIMS.get(rel.relation, "{s} " + rel.relation.replace("_", " ") + " {o}").format(s=rel.subject, o=rel.object)
+    text = f"Claim: {claim}\n\nSentence: {rel.evidence}"
+    if context:   # the paragraph, so competitor lists etc. keep their introduction
+        text += f"\n\nSurrounding text: {context[:1500]}"
+    return text
+
+
+def parse_verdict(content: str) -> str:
+    """'yes' / 'no' / 'unclear'; anything unreadable counts as 'unclear' (kept, lower confidence)."""
+    try:
+        ans = str(json.loads(content).get("answer", "")).strip().lower()
+    except (json.JSONDecodeError, AttributeError):
+        ans = content.strip().lower()
+    return ans if ans in ("yes", "no", "unclear") else "unclear"
+
+
 @dataclass
 class Relationship:
     subject: str
@@ -100,6 +151,19 @@ class OllamaExtractor:
         names = [m.get("name", "") for m in r.json().get("models", [])]
         if not any(n.split(":")[0] == self.model.split(":")[0] for n in names):
             raise SystemExit(f"Model {self.model} not pulled. Run: ollama pull {self.model}")
+
+    def verify(self, company: str, rel: Relationship, context: str = "") -> str:
+        """Second opinion on one relationship: 'yes', 'no' or 'unclear' (see VERIFY_SYSTEM)."""
+        body = {
+            "model": self.model, "stream": False, "format": VERIFY_SCHEMA, "options": {"temperature": 0},
+            "messages": [
+                {"role": "system", "content": VERIFY_SYSTEM.format(company=company)},
+                {"role": "user", "content": verify_prompt(rel, context)},
+            ],
+        }
+        r = requests.post(f"{self.url}/api/chat", json=body, timeout=self.timeout)
+        r.raise_for_status()
+        return parse_verdict(r.json().get("message", {}).get("content", ""))
 
     def extract(self, company: str, passage: Passage) -> list[Relationship]:
         body = {
@@ -235,7 +299,11 @@ def _key_word(name: str) -> str | None:
 _FILER_BUYS = re.compile(            # "we purchase memory from X", "supplied by X", "we rely on X for"
     r"\b(?:(?:purchas\w*|buy\w*|bought|sourc\w*|procur\w*|obtain\w*|licens\w*|order\w*)\b[^.;]{0,150}?\bfrom"
     r"|(?:supplied|manufactured|fabricated|produced|provided|assembled|made)\s+(?:for\s+us\s+)?by"
-    r"|(?:rel(?:y|ies|ied)|depend\w*)\s+(?:on|upon))\b", re.I)
+    r"|(?:rel(?:y|ies|ied)|depend\w*)\s+(?:on|upon)"
+    # Capacity reservations / supply or purchase commitments are made by the buyer:
+    # "Capacity Reservation and Wafer Supply Commitment Agreement with GlobalFoundries"
+    r"|(?:capacity\s+reservation|reserve\w*\s+capacity|supply\s+(?:commitment|assurance)|purchase\s+commitment"
+    r"|take[\s-]or[\s-]pay|prepa(?:y|id|yment))[^.;]{0,150}?\b(?:with|from))\b", re.I)
 _SUPPLIER_LIST = re.compile(         # "foundries, such as X", "suppliers including X"
     r"\b(?:foundr\w*|suppliers?|vendors?|subcontractors?|(?:contract\s+)?manufacturers?)\b,?\s+"
     r"(?:such\s+as|including|like)\b", re.I)
@@ -274,6 +342,36 @@ def _seller(other: str, evidence: str) -> str | None:
         if _OTHER_BUYS_AFTER.search(evidence[m.end():]):
             return "filer"
     return None
+
+
+def rules_support(rel: Relationship, company: str, context: str = "") -> bool:
+    """True if the sentence itself shows this link explicitly ("we purchase memory from X",
+    "X accounted for 85% of revenue", "our acquisition of X"). Used so the model's yes/no check can
+    lower confidence but never delete a link the sentence spells out (review() has already put the
+    direction in line with these same patterns)."""
+    filer_is_subject = is_filer(rel.subject, company)
+    other = rel.object if filer_is_subject else rel.subject
+    ev = rel.evidence or ""
+    if rel.relation in ("supplies", "customer_of"):
+        seller = _seller(other, ev)                     # who the sentence says sells
+        if seller is None:
+            return False
+        # supplies: the subject sells; customer_of: the object sells. Must agree with the sentence.
+        claimed_seller_is_filer = filer_is_subject if rel.relation == "supplies" else not filer_is_subject
+        return (seller == "filer") == claimed_seller_is_filer
+    if rel.relation == "acquired":
+        side = _acquisition_side(other, ev)             # who the sentence says acquired
+        return side is not None and (side == "filer") == filer_is_subject
+    if rel.relation == "competes_with":
+        # Named in a sentence / paragraph about competition. The model is unreliable deep inside long
+        # competitor lists (it rejected Rockwell, the 15th of 17 names in Teradyne's list).
+        return _mentioned(other, ev) and bool(RELATION_CUES["competes_with"].search(ev + " " + context))
+    return False
+
+
+def final_verdict(verdict: str, rel: Relationship, company: str, context: str = "") -> str:
+    """The model's verdict, except that a 'no' on an explicitly worded link becomes 'unclear'."""
+    return "unclear" if verdict == "no" and rules_support(rel, company, context) else verdict
 
 
 def review(rel: Relationship, company: str | None, passage_text: str | None = None) -> Relationship | None:

@@ -215,3 +215,44 @@ def test_reread_swaps_in_the_new_results_at_the_end(client, monkeypatch):
     c.post("/api/extract/TER", params={"refresh": True})
     assert c.jobs.wait("CIK:97210")["found"] == 1
     assert _edges(c) == {("CIK:97210", "competes_with", "ORG:advantest")}
+
+
+# ---------- verification pass ----------
+
+class VerifyingLLM(FakeLLM):
+    """Extracts one extra, unsupported partnership; says no to it and to Advantest, unclear to NVIDIA."""
+    calls = []
+    def extract(self, company, passage):
+        out = super().extract(company, passage)
+        if "Advantest" in passage.text:
+            out.append(Relationship(company, "partners_with", "Cohu, Inc.", "We have a joint development "
+                                    "partnership with Cohu, Inc.", 0.9, "", passage.section, passage.index))
+        return out
+    def verify(self, company, rel, context=""):
+        VerifyingLLM.calls.append((rel.subject, rel.relation, rel.object))
+        return "no" if ("Advantest" in rel.object or rel.relation == "partners_with") else "unclear"
+
+
+def test_verification_drops_no_and_scores_unclear(client):
+    c, _ = client
+    VerifyingLLM.calls = []
+    c.jobs._make_llm = VerifyingLLM
+    c.get("/api/company/TER"); c.post("/api/extract/TER")
+    assert c.jobs.wait("CIK:97210")["found"] == 2
+    edges = {(e["source"], e["relation"], e["target"]): e["confidence"] for e in c.get("/api/company/TER").json()["edges"]}
+    assert edges == {
+        ("CIK:1045810", "supplies", "CIK:97210"): 0.6,        # model: unclear
+        ("CIK:97210", "competes_with", "ORG:advantest"): 0.6,  # model: no, but the sentence names it a competitor
+    }                                                          # partners_with Cohu: passes rules, model no -> dropped
+    assert len(VerifyingLLM.calls) == 3
+
+
+def test_verification_errors_keep_the_relationship(client):
+    c, _ = client
+
+    class Broken(FakeLLM):
+        def verify(self, company, rel, context=""):
+            raise TimeoutError("ollama timed out")
+    c.jobs._make_llm = Broken
+    c.get("/api/company/TER"); c.post("/api/extract/TER")
+    assert c.jobs.wait("CIK:97210")["found"] == 2

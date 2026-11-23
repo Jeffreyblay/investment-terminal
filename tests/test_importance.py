@@ -44,7 +44,7 @@ def _db(tmp_path):
                  ("CIK:3", "INTEL CORP")]:
         st.upsert_entity({"id": i, "name": n, "listed": i.startswith("CIK")})
     st.db.execute("INSERT INTO filings (accession, entity_id, form) VALUES ('a1', 'CIK:1', '10-K')")
-    r = lambda s, rel, o: Relationship(s, rel, o, "evidence", 0.9)
+    r = lambda s, rel, o: Relationship(s, rel, o, "evidence", 0.6)
     st.add_relationship("CIK:1", "supplies", "CIK:2", r("Symbotic", "supplies", "Walmart"), "a1", "m")
     st.add_relationship("ORG:harmonic drive systems", "supplies", "CIK:1", r("Harmonic", "supplies", "Symbotic"), "a1", "m")
     # customer_of is stored buyer -> seller: Symbotic buys from Intel.
@@ -60,6 +60,8 @@ def test_enrich_filing_sets_columns(tmp_path):
     assert got[("CIK:1", "CIK:2")] == (MAJOR, 87.0)
     assert got[("ORG:harmonic drive systems", "CIK:1")] == (SINGLE, None)
     assert got[("CIK:1", "CIK:3")] == (None, None)           # Intel is a plain supplier
+    conf = {(r["source_id"], r["target_id"]): r["confidence"] for r in st.db.execute("SELECT * FROM relationships")}
+    assert conf[("CIK:1", "CIK:2")] == 0.9                   # 87% of revenue confirms the link
     st.close()
 
 
@@ -86,3 +88,14 @@ def test_real_symbotic_sentences():
 def test_ownership_stake_is_not_a_revenue_share():
     s = sentences("Units were issued to Walmart, which represented a 10.0 % ownership in the Company.")
     assert customer_importance("Walmart Inc.", s) == (None, None)
+
+
+def test_largest_customer_must_be_said_of_that_company():
+    gf = sentences("We recently joined our largest customer's American Manufacturing Program and are working with "
+                   "both our customer and GlobalFoundries to develop new process technologies for our products.")
+    assert customer_importance("GLOBALFOUNDRIES Inc.", gf) == (None, None)
+    for text in ("Walmart, our largest customer, renewed its agreement.",
+                 "Target Corporation is one of our largest customers.",
+                 "Our largest customer, Walmart, renewed its agreement."):
+        name = "Walmart Inc." if "Walmart" in text else "Target Corporation"
+        assert customer_importance(name, sentences(text))[0] == MAJOR, text

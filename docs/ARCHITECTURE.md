@@ -72,6 +72,8 @@ Tables: `entities`, `industry_members`, `filings` (with status), `mentions` (raw
 
 **Background extraction (`jobs.py`).** Reading a 10-K with the local LLM takes minutes, so after a search the Explorer calls `POST /api/extract/{ticker}` for companies not processed yet. `JobManager` queues it and one worker thread runs `process_filing` (one job at a time, matching the single GPU). `process_filing` commits after every passage and reports `progress(step, done, total, found)`; the Explorer polls `GET /api/jobs/{ticker}` every 1.5 s, shows "passage 12 of 30 · 9 relationships found", and re-fetches the company whenever `found` grows, so the network fills in live. Jobs live in memory (a server restart forgets the queue); results are in SQLite, and a company is marked processed only when its filing is finished. Quality filters (`extract.keep_relationship`) run both in `parse_response` and again in `process_filing`, so no extractor can bypass them.
 
+**Quality pipeline per relationship.** (1) `review()` rules: filer on one side, a named organisation on the other, the evidence has a cue for the relation, acquisitions relabelled, supply direction read from the sentence ("we purchase from X" → X supplies the filer). (2) `verify()`: the model answers yes / no / unclear to one plain claim ("Walmart buys products or services from Symbotic"); no drops it, yes sets confidence 0.9, unclear 0.6. A "no" on a link the sentence spells out in the same direction is downgraded to unclear (`final_verdict`). (3) `importance.py` scans the whole report for revenue shares and sole-source wording. `itx clean`, `itx verify` and `itx enrich` re-apply (1), (2) and (3) to stored data.
+
 ## Data flow and state
 ```
 filings.status:  fetched ──extract──▶ extracted

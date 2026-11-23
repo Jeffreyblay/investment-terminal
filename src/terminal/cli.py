@@ -20,6 +20,7 @@ Maintenance:
   itx reset-extract <ind>  re-queue an industry's filings
   itx clean [--dry-run]    drop stored relationships that fail the quality filters (no LLM)
   itx enrich [--ticker X]  mark major customers / single-source suppliers from cached reports (no LLM)
+  itx verify [--ticker X]  yes/no check by the model on stored relationships (--dry-run to preview)
   itx neo4j robotics       (optional) mirror the graph into Neo4j Community
 """
 from __future__ import annotations
@@ -72,7 +73,7 @@ def add_company(ed, st, info: dict, years: int, segment=None, industry=None, see
 
 
 def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, tag=True,
-                   progress=None) -> int:
+                   progress=None, verify=True) -> int:
     """Download one filing, extract relationships (and industry tags), store them.
     `row` needs: url, accession, form, company, entity_id.
     `progress(step, done, total, found)`, if given, is called as work advances (used by the API's
@@ -80,7 +81,9 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
     report = progress or (lambda *a: None)
     report("downloading", 0, 0, 0)
     from .edgar import EdgarError
-    from .extract import is_filer, review, tag_company
+    import dataclasses
+
+    from .extract import VERDICT_CONFIDENCE, final_verdict, is_filer, review, tag_company
     from .sections import candidate_passages, html_to_text, split_sections
     try:
         html = ed.get(row["url"])
@@ -118,6 +121,16 @@ def process_filing(ed, st, llm, resolver, row, keywords=None, max_passages=40, t
             r = review(r, row["company"], p.text)
             if r is None:
                 continue
+            # Second opinion from the model on this one claim: "no" drops it, else sets confidence.
+            if verify and hasattr(llm, "verify"):
+                try:
+                    verdict = final_verdict(llm.verify(row["company"], r, p.text), r, row["company"], p.text)
+                except Exception as e:  # network / timeout: keep it, unverified
+                    print(f"    verify failed: {e}")
+                    verdict = "unclear"
+                if verdict == "no":
+                    continue
+                r = dataclasses.replace(r, confidence=VERDICT_CONFIDENCE[verdict])
             # The filer's own name always maps to the filer; everything else goes through the resolver.
             src = filer if is_filer(r.subject, row["company"]) else resolver.resolve(r.subject)
             tgt = filer if is_filer(r.object, row["company"]) else resolver.resolve(r.object)
@@ -343,6 +356,55 @@ def cmd_clean(args) -> None:
     print(f"{len(rows)} relationships: {dropped} {verb} removed, {relabelled} {verb} relabelled.")
 
 
+def cmd_verify(args) -> None:
+    """Yes/no check by the model on relationships already stored: 'no' removes, else sets confidence.
+    The paragraph around each quoted sentence is rebuilt from the cached report (it isn't stored),
+    so competitor lists keep their introduction ("Competitors in our Robotics segment include ...")."""
+    from .extract import VERDICT_CONFIDENCE, Relationship, final_verdict
+    from .sections import html_to_text
+    from .store import Store
+    llm, st, ed = _llm(args.model), Store(), _edgar()
+    texts: dict[str, list[str]] = {}
+
+    def paragraph(accession: str, url: str, evidence: str) -> str:
+        if accession not in texts:
+            try:
+                paras = re.split(r"\n\s*\n", html_to_text(ed.get(url)))
+                texts[accession] = [" ".join(p.split()) for p in paras]
+            except Exception:
+                texts[accession] = []
+        probe = " ".join(evidence.split())[:60].lower()
+        return next((p for p in texts[accession] if probe and probe in p.lower()), "")
+
+    q = """SELECT r.id, r.relation, r.evidence, r.accession, f.url, s.name AS s, t.name AS t, e.name AS filer, e.ticker
+           FROM relationships r JOIN entities s ON s.id = r.source_id JOIN entities t ON t.id = r.target_id
+           JOIN filings f ON f.accession = r.accession JOIN entities e ON e.id = f.entity_id"""
+    params: tuple = ()
+    if args.ticker:
+        q += " WHERE e.ticker = ?"
+        params = (args.ticker.upper(),)
+    rows = st.db.execute(q + " ORDER BY e.ticker", params).fetchall()
+    counts = {"yes": 0, "unclear": 0, "no": 0}
+    for r in rows:
+        rel = Relationship(r["s"], r["relation"], r["t"], r["evidence"] or "", 0)
+        context = paragraph(r["accession"], r["url"], r["evidence"] or "")
+        verdict = final_verdict(llm.verify(r["filer"], rel, context), rel, r["filer"], context)
+        counts[verdict] += 1
+        if verdict != "yes":
+            print(f"  {verdict:7} {r['ticker'] or '':5} {r['s']} --{r['relation']}--> {r['t']}")
+        if args.dry_run:
+            continue
+        if verdict == "no":
+            st.db.execute("DELETE FROM relationships WHERE id=?", (r["id"],))
+        else:
+            st.db.execute("UPDATE relationships SET confidence=? WHERE id=?", (VERDICT_CONFIDENCE[verdict], r["id"]))
+        st.db.commit()
+    st.close()
+    verb = "would be" if args.dry_run else "were"
+    print(f"{len(rows)} checked: {counts['yes']} yes, {counts['unclear']} unclear, {counts['no']} no "
+          f"({counts['no']} {verb} removed).")
+
+
 def cmd_enrich(args) -> None:
     """Recompute importance (major customer / single source) for companies already read.
     Uses the cached annual reports: no LLM and, after the first download, no network."""
@@ -465,6 +527,10 @@ def main(argv: list[str] | None = None) -> None:
     sp = add("review", cmd_review, None)
     sp.add_argument("--limit", type=int, default=50)
     add("reset-extract", cmd_reset)
+    sp = add("verify", cmd_verify, None)
+    sp.add_argument("--ticker", help="only this company")
+    sp.add_argument("--dry-run", action="store_true", help="show verdicts, change nothing")
+    sp.add_argument("--model", default=None)
     sp = add("enrich", cmd_enrich, None)
     sp.add_argument("--ticker", help="only this company")
     sp = add("clean", cmd_clean, None)

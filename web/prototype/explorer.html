@@ -443,6 +443,8 @@ class Component extends DCLogic {
     const cell = (text, style) => ({ text: String(text), style: (style || '') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap' });
     // Importance: the revenue share when the report gives one ("87% of revenue"), else the sample's wording.
     const impCell = (imp, pct) => imp === 'major' ? cell(pct != null ? pct + '% of revenue' : 'Major customer', 'color:#4F46E5;font-weight:500') : (imp === 'single' ? cell('Single source', 'color:#DC2626;font-weight:500') : cell('Mentioned', 'color:#6B7280'));
+    // Confidence from the model's yes/no check: 0.9 = the text states it, 0.6 = implied only (greyed).
+    const confCell = (v) => v < 0.7 ? cell(v.toFixed(2) + ' ?', 'color:#9CA3AF') : cell(v.toFixed(2));
     const seenCell = (l) => cell((l.first === l.last ? l.first : l.first + '–' + l.last) + (l.stale ? ' · stale' : ''), l.stale ? 'color:#9CA3AF' : 'color:#374151');
     const rowStyle = (cols, on) => 'width:100%;display:grid;grid-template-columns:' + cols + ';gap:10px;padding:0 16px;min-height:38px;align-items:center;border:none;border-bottom:1px solid #F1F3F7;background:' + (on ? '#EEF0FF' : '#FFFFFF') + ';' + mono + ';color:#111827;text-align:left;cursor:pointer';
     let colsDef, head, rows = [], title, count;
@@ -461,7 +463,7 @@ class Component extends DCLogic {
     } else if (comp) {
       colsDef = '64px minmax(0,1fr) 64px minmax(0,1fr) 120px 90px 120px 60px'; head = ['MAKER', '', 'BUYER', '', 'IMPORTANCE', 'MADE IN', 'SEEN', 'CONF'];
       rows = active.filter((l) => l.comp === comp && hop[l.from] != null && hop[l.to] != null).map((l) => ({ pick: pick(l.from), style: rowStyle(colsDef, l.from === selId || l.to === selId),
-        cells: [cell(tick(l.from), 'color:#4F46E5;font-weight:500'), cell(byId[l.from].name, 'font-family:Inter,sans-serif'), cell(tick(l.to), 'color:#4F46E5;font-weight:500'), cell(byId[l.to].name, 'font-family:Inter,sans-serif'), impCell(l.imp, l.pct), cell(l.country || '–'), seenCell(l), cell(linkConf(l).toFixed(2))] }));
+        cells: [cell(tick(l.from), 'color:#4F46E5;font-weight:500'), cell(byId[l.from].name, 'font-family:Inter,sans-serif'), cell(tick(l.to), 'color:#4F46E5;font-weight:500'), cell(byId[l.to].name, 'font-family:Inter,sans-serif'), impCell(l.imp, l.pct), cell(l.country || '–'), seenCell(l), confCell(linkConf(l))] }));
       title = 'Supply of ' + comp; count = rows.length + ' links';
     } else {
       colsDef = '60px 110px minmax(0,1fr) minmax(0,1fr) 116px 84px 116px 48px'; head = ['TICKER', 'RELATION', 'COUNTERPARTY', 'COMPONENT', 'IMPORTANCE', 'MADE IN', 'SEEN', 'CONF'];
@@ -473,7 +475,7 @@ class Component extends DCLogic {
         cells: [cell(tick(x), 'color:#4F46E5;font-weight:500'), cell(rel, 'color:' + color), cell(byId[x].name, 'font-family:Inter,sans-serif'),
           l && isSupply(l) && l.comp ? cell(l.comp,'font-family:Inter,sans-serif;color:#374151;text-decoration:underline') : cell('–', 'color:#9CA3AF'),
           l ? impCell(l.imp, l.pct) : cell('–', 'color:#9CA3AF'), l && l.country ? cell(l.country, l.country === expo ? 'color:#B45309;font-weight:500' : '') : cell('–', 'color:#9CA3AF'),
-          l ? seenCell(l) : cell('–', 'color:#9CA3AF'), cell((l ? linkConf(l) : rivalConf(selId, x)).toFixed(2))] }));
+          l ? seenCell(l) : cell('–', 'color:#9CA3AF'), confCell(l ? linkConf(l) : rivalConf(selId, x))] }));
       title = 'Relationships · ' + byId[selId].name; count = rows.length + ' rows';
     }
 

@@ -204,3 +204,48 @@ def test_clean_twice_does_not_flip_back(tmp_path, monkeypatch, capsys):
     main(["clean"]); assert edge() == ("CIK:2", "CIK:1")      # fixed: SK hynix supplies NVIDIA
     main(["clean"]); assert edge() == ("CIK:2", "CIK:1")      # and stays fixed
     assert "0 were relabelled" in capsys.readouterr().out.strip().splitlines()[-1]
+
+
+def test_parse_verdict_and_claims():
+    from terminal.extract import parse_verdict, verify_prompt
+    assert parse_verdict('{"answer": "yes"}') == "yes"
+    assert parse_verdict('{"answer": "NO"}') == "no"
+    assert parse_verdict("garbage") == "unclear"
+    p = verify_prompt(rel("Symbotic Inc.", "invested_in", "Warehouse Technologies LLC", "Walmart purchased units."))
+    assert "Symbotic Inc. invested in Warehouse Technologies LLC" in p and "Walmart purchased units." in p
+
+
+def test_rules_overrule_a_no_only_when_the_direction_agrees():
+    from terminal.extract import final_verdict
+    right = rel("SK Hynix Inc.", "supplies", NV, MEMORY)
+    reversed_ = rel(NV, "supplies", "SK Hynix Inc.", MEMORY)
+    assert final_verdict("no", right, NV) == "unclear"        # sentence spells it out: keep, lower confidence
+    assert final_verdict("no", reversed_, NV) == "no"         # reversed claim: the "no" stands
+    assert final_verdict("no", rel(NV, "customer_of", "SK Hynix Inc.", MEMORY), NV) == "unclear"
+    warehouse = rel("Symbotic Inc.", "invested_in", "Warehouse Technologies LLC",
+                    "Walmart purchased 267,281 units of Warehouse Technologies LLC.")
+    assert final_verdict("no", warehouse, "Symbotic Inc.") == "no"
+    assert final_verdict("yes", warehouse, "Symbotic Inc.") == "yes"
+    acq = rel(RKLB, "acquired", "GEOST", ACQ)
+    assert final_verdict("no", acq, RKLB) == "unclear"
+    assert final_verdict("no", rel("GEOST", "acquired", RKLB, ACQ), RKLB) == "no"
+
+
+def test_capacity_reservation_means_the_filer_buys():
+    s = ("In fiscal year 2022, the Company entered into a Capacity Reservation and Wafer Supply Commitment Agreement "
+         "with GlobalFoundries to reserve capacity and set wafer pricing.")
+    out = review(rel("CIRRUS LOGIC, INC.", "supplies", "GLOBALFOUNDRIES Inc.", s), "CIRRUS LOGIC, INC.")
+    assert (out.subject, out.object) == ("GLOBALFOUNDRIES Inc.", "CIRRUS LOGIC, INC.")
+
+
+def test_a_no_on_a_listed_competitor_becomes_unclear():
+    from terminal.extract import final_verdict
+    lst = ("Competitors in our Robotics segment include manufacturers of autonomous mobile robots such as Omron, "
+           "Rockwell Automation, Junion, HikRobot, Agilox, and KION.")
+    assert final_verdict("no", rel("TERADYNE, INC", "competes_with", "ROCKWELL AUTOMATION, INC", lst), "TERADYNE, INC") == "unclear"
+    isrg = "Companies that have introduced products in the field include: CMR Surgical Ltd.; Distalmotion SA."
+    para = "We face competition from companies developing robotic systems. " + isrg
+    r = rel("INTUITIVE SURGICAL INC", "competes_with", "Distalmotion SA", isrg)
+    assert final_verdict("no", r, "INTUITIVE SURGICAL INC", para) == "unclear"   # cue in the paragraph
+    assert final_verdict("no", r, "INTUITIVE SURGICAL INC") == "no"              # no competition cue at all
+    assert final_verdict("no", rel("TERADYNE, INC", "competes_with", "Keysight", lst), "TERADYNE, INC") == "no"  # not named
